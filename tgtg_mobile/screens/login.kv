@@ -28,59 +28,55 @@
             size_hint_y: None
             height: "30dp"
 
-        BoxLayout:
-            orientation: "vertical"
+        TextInput:
+            id: email_input
+            hint_text: "Your TGTG email"
+            multiline: False
+            keyboard_suggestions: True
+            input_type: "email"
             size_hint_y: None
-            height: "80dp"
+            height: "50dp"
+            font_size: "16sp"
+            valign: "middle"
+            padding: [15, 0]
+            background_color: 0.2, 0.22, 0.26, 1
+            foreground_color: 1, 1, 1, 1
+            cursor_color: 1, 1, 1, 1
 
-            TextInput:
-                id: email_input
-                hint_text: "Your TGTG email"
-                multiline: False
-                keyboard_suggestions: True
-                input_type: "email"
-                size_hint_y: None
-                height: "50dp"
-                font_size: "16sp"
-                valign: "middle"
-                padding: [15, 0]
-                background_color: 0.2, 0.22, 0.26, 1
-                foreground_color: 1, 1, 1, 1
-                cursor_color: 1, 1, 1, 1
-
-        BoxLayout:
-            orientation: "vertical"
+        Button:
+            text: "Send PIN"
+            on_release: root.request_login(email_input.text)
+            disabled: root.is_loading
+            background_color: 0.29, 0.76, 0.26, 1
+            font_size: "16sp"
+            bold: True
             size_hint_y: None
-            height: "80dp"
+            height: "50dp"
 
-            TextInput:
-                id: pin_input
-                hint_text: "Enter PIN from email"
-                multiline: False
-                input_type: "number"
-                password: True
-                size_hint_y: None
-                height: "50dp"
-                font_size: "20sp"
-                valign: "middle"
-                padding: [15, 0]
-                background_color: 0.2, 0.22, 0.26, 1
-                foreground_color: 1, 1, 1, 1
-                cursor_color: 1, 1, 1, 1
-
-        BoxLayout:
-            orientation: "vertical"
+        TextInput:
+            id: pin_input
+            hint_text: "Enter 6-digit PIN"
+            multiline: False
+            input_type: "number"
+            password: True
             size_hint_y: None
-            height: "100dp"
-            spacing: 10
+            height: "50dp"
+            font_size: "20sp"
+            valign: "middle"
+            padding: [15, 0]
+            background_color: 0.2, 0.22, 0.26, 1
+            foreground_color: 1, 1, 1, 1
+            cursor_color: 1, 1, 1, 1
 
-            Button:
-                text: "Send PIN"
-                on_release: root.request_login(email_input.text)
-                disabled: root.is_loading
-                background_color: 0.29, 0.76, 0.26, 1
-                font_size: "16sp"
-                bold: True
+        Button:
+            text: "Verify PIN"
+            on_release: root.submit_pin(pin_input.text)
+            disabled: root.is_loading
+            background_color: 0.29, 0.76, 0.26, 1
+            font_size: "16sp"
+            bold: True
+            size_hint_y: None
+            height: "50dp"
 
         ActivityIndicator:
             active: root.is_loading
@@ -90,7 +86,7 @@
         Label:
             text: root.status_message
             font_size: "14sp"
-            color: 1, 0.5, 0.5, 1 if "error" in root.status_message.lower() or "failed" in root.status_message.lower() else 0.7, 0.7, 0.7, 1
+            color: 1, 0.5, 0.5, 1 if "error" in root.status_message.lower() else 0.7, 0.7, 0.7, 1
             size_hint_y: None
             height: "40dp"
             text_size: self.width, None
