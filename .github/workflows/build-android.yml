@@ -1,0 +1,68 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tgtg_mobile/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tgtg_mobile/**'
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
+            zlib1g-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libtinfo5 \
+            cmake \
+            libffi-dev \
+            libssl-dev \
+            openjdk-17-jdk
+
+      - name: Set JAVA_HOME
+        run: echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+
+      - name: Install Python dependencies
+        run: |
+          pip install buildozer cython setuptools
+
+      - name: Build debug APK
+        working-directory: tgtg_mobile
+        run: |
+          buildozer android debug --verbose 2>&1 | tail -100
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: tgtg-scanner-apk
+          path: tgtg_mobile/bin/*.apk
+          retention-days: 7
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildozer-logs
+          path: tgtg_mobile/.buildozer/**/*.log
+          retention-days: 7

@@ -1,0 +1,6 @@
+# TGTG Mobile App Requirements
+kivy>=2.3.0
+certifi>=2024.0.0
+urllib3>=2.0.0
+plyer>=2.0.0
+android>=0.1.0; platform_system == "Linux" and platform_machine == "aarch64"
