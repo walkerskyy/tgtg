@@ -78,6 +78,7 @@ class FavoritesScreen(Screen):
     items = ListProperty([])
     is_loading = BooleanProperty(False)
     error_message = StringProperty("")
+    _previous_items = set()
 
     def on_enter(self):
         self.load_favorites()
@@ -98,6 +99,20 @@ class FavoritesScreen(Screen):
             try:
                 favorites = app.tgtg_client.get_favorites()
                 items = [Item(f) for f in favorites]
+                
+                current_item_ids = {i.item_id for i in items}
+                available_items = [i for i in items if i.is_available]
+                
+                for item in available_items:
+                    if item.item_id not in self._previous_items and self._previous_items:
+                        if app.notification_service:
+                            app.notification_service.send_notification(
+                                title="TGTG Available!",
+                                message=f"{item.display_name} - {item.price}",
+                                item_id=item.item_id
+                            )
+                
+                self._previous_items = current_item_ids
                 self._update_items(items)
             except Exception as e:
                 self._show_error(str(e))
