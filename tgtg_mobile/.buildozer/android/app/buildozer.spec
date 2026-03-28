@@ -7,7 +7,7 @@ package.domain = org.tgtg
 source.dir = .
 version = 0.1.1
 
-requirements = python3,kivy==2.3.0,requests,certifi,android,plyer,pyjnius
+requirements = python3,kivy==2.3.0,requests,urllib3,certifi,plyer
 
 orientation = portrait
 

@@ -9,16 +9,7 @@ ANDROID_AVAILABLE = False
 try:
     from android import AndroidService
     from android.runnable import run_on_ui_thread
-    from jnius import autoclass, cast, JavaClass, MetaJavaClass
-
     ANDROID_AVAILABLE = True
-    PythonActivity = autoclass("org.kivy.android.PythonActivity")
-    Context = autoclass("android.content.Context")
-    NotificationManager = autoclass("android.app.NotificationManager")
-    NotificationCompat = autoclass("androidx.core.app.NotificationCompat")
-    PendingIntent = autoclass("android.app.PendingIntent")
-    Intent = autoclass("android.content.Intent")
-
 except ImportError:
     log.debug("Android modules not available - running in non-Android mode")
 
@@ -27,53 +18,27 @@ class NotificationService:
     def __init__(self, channel_id: str = "tgtg_scanner", channel_name: str = "TGTG Scanner"):
         self.channel_id = channel_id
         self.channel_name = channel_name
-        self.notification_manager: NotificationManager | None = None
-        self.service = None
-        if ANDROID_AVAILABLE:
-            self._init_notification_channel()
-
-    def _init_notification_channel(self):
+        self._plyer_notification = None
+        
         try:
-            CharSequence = autoclass("java.lang.CharSequence")
-            PythonActivity.mActivity.getSystemService(Context.NOTIFICATION_SERVICE)
-            self.notification_manager = cast(
-                "android.app.NotificationManager",
-                PythonActivity.mActivity.getSystemService(Context.NOTIFICATION_SERVICE),
-            )
-        except Exception as e:
-            log.error(f"Failed to initialize notification channel: {e}")
+            from plyer import notification
+            self._plyer_notification = notification
+        except ImportError:
+            log.debug("Plyer notifications not available")
 
     def send_notification(self, title: str, message: str, item_id: str | None = None):
-        if not ANDROID_AVAILABLE:
-            log.info(f"Notification (mock): {title} - {message}")
-            return
-
-        try:
-            intent = Intent(PythonActivity.mActivity, PythonActivity.mActivity.getClass())
-            intent.setFlags(0x10000000)
-            if item_id:
-                intent.putExtra("item_id", item_id)
-
-            pending_intent = PendingIntent.getActivity(
-                PythonActivity.mActivity,
-                0,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE,
-            )
-
-            builder = NotificationCompat.Builder(PythonActivity.mActivity, self.channel_id)
-            builder.setContentTitle(title)
-            builder.setContentText(message)
-            builder.setSmallIcon(17301589)
-            builder.setContentIntent(pending_intent)
-            builder.setAutoCancel(True)
-
-            notification = builder.build()
-            if self.notification_manager:
-                self.notification_manager.notify(hash(item_id or title), notification)
-
-        except Exception as e:
-            log.error(f"Failed to send notification: {e}")
+        if self._plyer_notification:
+            try:
+                self._plyer_notification.notify(
+                    title=title,
+                    message=message,
+                    app_name="TGTG Scanner",
+                    timeout=5,
+                )
+            except Exception as e:
+                log.error(f"Failed to send notification: {e}")
+        else:
+            log.info(f"Notification: {title} - {message}")
 
 
 class BackgroundScanner:
