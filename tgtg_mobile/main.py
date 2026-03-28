@@ -33,6 +33,7 @@ class SplashScreen(Screen):
 class TgtgMobileApp(App):
     token_storage = None
     tgtg_client = None
+    notification_service = None
 
     def build(self):
         log.info("Building TGTG Mobile app...")
@@ -73,6 +74,14 @@ class TgtgMobileApp(App):
                 except Exception as e:
                     log.error(f"Client init error: {e}")
                     self.token_storage.clear()
+            
+            try:
+                from services.android_service import NotificationService
+                self.notification_service = NotificationService()
+                log.info("Notification service initialized")
+            except Exception as e:
+                log.warning(f"Notification service not available: {e}")
+                self.notification_service = None
             
             sm.current = "favorites" if self.tgtg_client else "login"
         except Exception as e:
