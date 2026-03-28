@@ -1,0 +1,27 @@
+<SplashScreen>:
+    BoxLayout:
+        orientation: "vertical"
+        padding: 50
+        spacing: 20
+
+        canvas.before:
+            Color:
+                rgb: 0.15, 0.18, 0.22
+            Rectangle:
+                pos: self.pos
+                size: self.size
+
+        Label:
+            text: "TGTG Scanner"
+            font_size: "32sp"
+            bold: True
+            color: 1, 1, 1, 1
+            size_hint_y: None
+            height: "80dp"
+
+        Label:
+            text: "Loading..."
+            font_size: "16sp"
+            color: 0.7, 0.7, 0.7, 1
+            size_hint_y: None
+            height: "30dp"

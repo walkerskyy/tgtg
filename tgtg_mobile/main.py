@@ -8,11 +8,15 @@ try:
     from kivy import require
     from kivy.app import App
     from kivy.uix.screenmanager import ScreenManager, Screen
+    from kivy.lang import Builder
     from kivy.clock import Clock
     require("2.3.0")
 except ImportError as e:
     log.error(f"Kivy import failed: {e}")
     raise
+
+# Load KV files
+Builder.load_file("main.kv")
 
 
 class SplashScreen(Screen):
