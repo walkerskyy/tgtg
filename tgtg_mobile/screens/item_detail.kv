@@ -1,0 +1,207 @@
+<ItemDetailScreen>:
+    BoxLayout:
+        orientation: "vertical"
+
+        canvas.before:
+            Color:
+                rgb: 0.15, 0.18, 0.22
+            Rectangle:
+                pos: self.pos
+                size: self.size
+
+        # Header
+        BoxLayout:
+            size_hint_y: None
+            height: "56dp"
+            padding: [10, 0]
+
+            canvas.before:
+                Color:
+                    rgb: 0.12, 0.14, 0.18
+                Rectangle:
+                    pos: self.pos
+                    size: self.size
+
+            Button:
+                text: "←"
+                font_size: "24sp"
+                size_hint_x: None
+                width: "50dp"
+                background_color: 0, 0, 0, 0
+                on_release: root.go_back()
+
+            Label:
+                text: "Item Details"
+                font_size: "18sp"
+                bold: True
+                color: 1, 1, 1, 1
+                size_hint_x: 1
+
+            Button:
+                id: favorite_btn
+                text: "♡"
+                font_size: "24sp"
+                size_hint_x: None
+                width: "50dp"
+                background_color: 0, 0, 0, 0
+                color: 0.7, 0.7, 0.7, 1
+                on_release: root.toggle_favorite()
+
+        # Content
+        ScrollView:
+            size_hint_y: 1
+
+            BoxLayout:
+                orientation: "vertical"
+                size_hint_y: None
+                height: self.minimum_height
+                padding: 15
+                spacing: 15
+
+                # Cover image
+                AsyncImage:
+                    id: item_image
+                    source: ""
+                    size_hint_y: None
+                    height: "200dp"
+                    allow_stretch: True
+                    keep_ratio: "fill"
+
+                # Store info
+                BoxLayout:
+                    orientation: "horizontal"
+                    size_hint_y: None
+                    height: "80dp"
+                    spacing: 15
+
+                    AsyncImage:
+                        id: item_logo
+                        source: ""
+                        size_hint_x: None
+                        width: "80dp"
+                        allow_stretch: True
+                        keep_ratio: True
+
+                    BoxLayout:
+                        orientation: "vertical"
+                        size_hint_x: 1
+                        spacing: 5
+
+                        Label:
+                            id: store_name
+                            text: ""
+                            font_size: "18sp"
+                            bold: True
+                            color: 1, 1, 1, 1
+                            text_size: self.width, None
+                            shorten: True
+                            shorten_from: "right"
+
+                        Label:
+                            id: rating
+                            text: ""
+                            font_size: "14sp"
+                            color: 1, 0.84, 0, 1
+
+                # Price section
+                BoxLayout:
+                    orientation: "horizontal"
+                    size_hint_y: None
+                    height: "50dp"
+                    spacing: 10
+
+                    Label:
+                        id: item_price
+                        text: ""
+                        font_size: "28sp"
+                        bold: True
+                        color: 0.29, 0.76, 0.26, 1
+                        size_hint_x: 1
+
+                    Label:
+                        id: item_value
+                        text: ""
+                        font_size: "14sp"
+                        color: 0.7, 0.7, 0.7, 1
+                        size_hint_x: 0.5
+
+                    Label:
+                        id: discount
+                        text: ""
+                        font_size: "14sp"
+                        bold: True
+                        color: 0.9, 0.3, 0.3, 1
+                        size_hint_x: 0.5
+
+                # Availability
+                Label:
+                    id: availability
+                    text: ""
+                    font_size: "16sp"
+                    bold: True
+                    color: 0.29, 0.76, 0.26, 1
+                    size_hint_y: None
+                    height: "30dp"
+                    halign: "center"
+
+                # Pickup info
+                BoxLayout:
+                    orientation: "vertical"
+                    size_hint_y: None
+                    height: "80dp"
+                    padding: 15, 10
+                    spacing: 5
+
+                    canvas.before:
+                        Color:
+                            rgb: 0.2, 0.22, 0.26
+                        RoundedRectangle:
+                            pos: self.pos
+                            size: self.size
+                            radius: [10]
+
+                    Label:
+                        text: "Pickup Time"
+                        font_size: "12sp"
+                        color: 0.7, 0.7, 0.7, 1
+                        size_hint_y: 0.4
+
+                    Label:
+                        id: pickup_time
+                        text: ""
+                        font_size: "16sp"
+                        bold: True
+                        color: 1, 1, 1, 1
+
+                    Label:
+                        id: pickup_location
+                        text: ""
+                        font_size: "14sp"
+                        color: 0.7, 0.7, 0.7, 1
+                        text_size: self.width, None
+                        shorten: True
+
+                # Description
+                BoxLayout:
+                    orientation: "vertical"
+                    size_hint_y: None
+                    height: self.minimum_height
+                    padding: 0, 10
+
+                    Label:
+                        text: "Description"
+                        font_size: "14sp"
+                        bold: True
+                        color: 1, 1, 1, 1
+                        size_hint_y: None
+                        height: "30dp"
+
+                    Label:
+                        id: item_description
+                        text: ""
+                        font_size: "14sp"
+                        color: 0.7, 0.7, 0.7, 1
+                        text_size: self.width, None
+                        valign: "top"
+                        size_hint_y: None
+                        height: self.texture_size[1]

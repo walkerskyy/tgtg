@@ -1,0 +1,114 @@
+<FavoritesScreen>:
+    BoxLayout:
+        orientation: "vertical"
+        padding: 0
+        spacing: 0
+
+        canvas.before:
+            Color:
+                rgb: 0.15, 0.18, 0.22
+            Rectangle:
+                pos: self.pos
+                size: self.size
+
+        # Header
+        BoxLayout:
+            size_hint_y: None
+            height: "56dp"
+            padding: [15, 0]
+            spacing: 15
+
+            canvas.before:
+                Color:
+                    rgb: 0.12, 0.14, 0.18
+                Rectangle:
+                    pos: self.pos
+                    size: self.size
+
+            Label:
+                text: "My Favorites"
+                font_size: "20sp"
+                bold: True
+                color: 1, 1, 1, 1
+                size_hint_x: 1
+                halign: "left"
+                valign: "middle"
+                text_size: self.size
+
+            Button:
+                text: "S"
+                font_size: "18sp"
+                bold: True
+                size_hint_x: None
+                width: "56dp"
+                height: "48dp"
+                background_color: 0.3, 0.3, 0.35, 1
+                on_release: root.manager.current = "settings"
+
+            Button:
+                text: "R"
+                font_size: "18sp"
+                bold: True
+                size_hint_x: None
+                width: "56dp"
+                height: "48dp"
+                background_color: 0.3, 0.3, 0.35, 1
+                on_release: root.refresh()
+
+        # ScrollView with items
+        ScrollView:
+            id: scroll_view
+            size_hint: (1, 1)
+            do_scroll_x: False
+            do_scroll_y: True
+
+            GridLayout:
+                id: items_container
+                cols: 1
+                size_hint_y: None
+                size_hint_x: 1
+                width: root.width
+                height: self.minimum_height
+                padding: 10
+                spacing: 10
+
+        # Loading indicator (centered overlay)
+        BoxLayout:
+            opacity: 1 if root.is_loading else 0
+            disabled: not root.is_loading
+            size_hint_y: None
+            height: "50dp"
+            size_hint_x: None
+            width: "150dp"
+            pos_hint: {"center_x": 0.5, "center_y": 0.5}
+
+            Label:
+                text: "Loading..."
+                font_size: "16sp"
+                color: 0.7, 0.7, 0.7, 1
+                halign: "center"
+                valign: "middle"
+
+        # Empty state (centered label)
+        Label:
+            opacity: 1 if (not root.items and not root.is_loading) else 0
+            disabled: (root.items or root.is_loading)
+            text: "No favorites found"
+            font_size: "24sp"
+            color: 0.7, 0.7, 0.7, 1
+            halign: "center"
+            valign: "middle"
+            size_hint: (1, 1)
+
+        # Error message (at bottom)
+        Label:
+            opacity: 1 if root.error_message else 0
+            disabled: not root.error_message
+            text: root.error_message
+            font_size: "16sp"
+            color: 0.9, 0.3, 0.3, 1
+            halign: "center"
+            valign: "middle"
+            size_hint_y: None
+            height: "50dp"
+            pos_hint: {"center_x": 0.5}

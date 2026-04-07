@@ -12,6 +12,7 @@ coverage.xml
 .mypy_cache
 .ruff_cache
 .tox
+.buildozer
 
 .env
 config.ini
@@ -21,3 +22,10 @@ out.toml
 out.yaml
 dev.py
 compose.yml
+docker-compose.yml
+
+# Mobile app
+*.apk
+bin/
+tokens.json
+settings.json
