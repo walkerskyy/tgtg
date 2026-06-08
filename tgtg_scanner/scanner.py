@@ -1,5 +1,6 @@
 import logging
 import sys
+from pathlib import Path
 from random import random
 from time import sleep
 from typing import NoReturn
@@ -56,7 +57,12 @@ class Scanner:
         self.notifiers: Notifiers | None = None
         self.location: Location | None = None
         self.tgtg_client = self._build_client(config)
-        self.reservations = Reservations(self.tgtg_client)
+        reservations_dir = None
+        if self.config.file:
+            reservations_dir = str(Path(self.config.file).parent)
+        elif self.config.token_path:
+            reservations_dir = self.config.token_path
+        self.reservations = Reservations(self.tgtg_client, reservations_dir)
         self.favorites = Favorites(self.tgtg_client)
 
     @staticmethod
@@ -140,6 +146,7 @@ class Scanner:
 
         for item in self._load_items():
             if self.monitor.observe(item):
+                self._attempt_reservation(item)
                 self._send_messages(item)
                 self.metrics.send_notifications.labels(item.item_id, item.display_name).inc()
             self.metrics.update(item)
@@ -152,6 +159,18 @@ class Scanner:
             log.warning("No items in observation! Did you add any favorites?")
 
         self._save_tokens()
+
+    def _attempt_reservation(self, item: Item) -> None:
+        if not self.reservations.is_queued(item.item_id):
+            return
+        try:
+            order = self.tgtg_client.create_order(item.item_id, 1)
+            item.reservation_status = "reserved"
+            item.reservation_amount = 1
+            self.reservations.register_order(order["id"], item.item_id, 1, item.display_name)
+        except TgtgAPIError as err:
+            item.reservation_status = "failed"
+            item.reservation_error = str(err)
 
     def _send_messages(self, item: Item) -> None:
         """Send notifications for Item."""

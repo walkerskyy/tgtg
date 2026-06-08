@@ -437,8 +437,8 @@ class Telegram(Notifier):
             await update.callback_query.answer(f"Added {data.display_name} to reservation queue")
             log.debug('Added "%s" to reservation queue', data.display_name)
         if isinstance(data, Reservation):
-            self.reservations.reservation_query.remove(data)
-            await update.callback_query.answer(f"Removed {data.display_name} form reservation queue")
+            self.reservations.remove(data.item_id)
+            await update.callback_query.answer(f"Removed {data.display_name} from reservation queue")
             log.debug('Removed "%s" from reservation queue', data.display_name)
         if isinstance(data, Order):
             self.reservations.cancel_order(data.id)

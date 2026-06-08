@@ -282,7 +282,7 @@ def _print_welcome_message() -> None:
     for line in HEADER:
         log.info(line)
     log.info("")
-    log.info("Version %s", __version__)
+    log.info("Version %s auto", __version__)
     today = datetime.date.today()
     log.info("©%s, %s", today.year, __author__)
     log.info("For documentation and support please visit %s", __url__)

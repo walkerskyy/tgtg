@@ -37,6 +37,22 @@ def test_item_pickupdate_24h_format(tgtg_item: dict):
     assert "PM" not in pickupdate
 
 
+def test_item_reservation_attrs(tgtg_item: dict):
+    item = Item(tgtg_item)
+    assert item.reservation_status is None
+    assert item.reservation_error is None
+    assert item.reservation_amount is None
+
+    item.reservation_status = "reserved"
+    item.reservation_amount = 1
+    assert item.unmask("Status: ${{reservation_status}}, Qty: ${{reservation_amount}}") == "Status: reserved, Qty: 1"
+
+    item.reservation_error = "API error"
+    assert item.unmask("Error: ${{reservation_error}}") == "Error: API error"
+
+    item.check_mask("Status: ${{reservation_status}}, Error: ${{reservation_error}}")
+
+
 def test_item_pickupdate_12h_format(tgtg_item: dict):
     """Test pickup date formatting with 12-hour time format."""
     item = Item(tgtg_item, time_format="12h")

@@ -29,6 +29,9 @@ ATTRS = [
     "item_name",
     "packaging_option",
     "pickup_location",
+    "reservation_amount",
+    "reservation_error",
+    "reservation_status",
     "store_name",
     "item_logo",
     "item_cover",
@@ -89,6 +92,9 @@ class Item:
         self.store_name: str = store.get("store_name", "-")
 
         self.scanned_on: str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.reservation_status: str | None = None
+        self.reservation_error: str | None = None
+        self.reservation_amount: int | None = None
         self.location = location
         self.locale = locale
         self.time_format = time_format
