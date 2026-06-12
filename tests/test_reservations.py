@@ -35,12 +35,12 @@ def test_remove(reservations: Reservations):
     assert len(reservations.reservation_query) == 1
 
 
-def test_make_orders_does_not_remove_from_query(reservations: Reservations, tgtg_item: dict):
+def test_make_orders_removes_from_query_on_success(reservations: Reservations, tgtg_item: dict):
     callback_mock = MagicMock()
     reservations.reserve("123", "Test Item")
     reservations.make_orders({"123": Item(tgtg_item)}, callback_mock)
     assert len(reservations.active_orders) == 1
-    assert len(reservations.reservation_query) == 1
+    assert len(reservations.reservation_query) == 0
     callback_mock.assert_called_once_with(Reservation("123", 1, "Test Item"))
 
 

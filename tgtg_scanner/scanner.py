@@ -17,6 +17,7 @@ from tgtg_scanner.models import (
     Metrics,
     Reservations,
 )
+from tgtg_scanner.models.reservations import Reservation as ReservationObj
 from tgtg_scanner.models.stock_monitor import StockMonitor
 from tgtg_scanner.notifiers import Notifiers
 from tgtg_scanner.tgtg_client import BASE_URL, TgtgClient, extract_datadome, normalize_cookie, resolve_user_agent
@@ -147,6 +148,10 @@ class Scanner:
         for item in self._load_items():
             if self.monitor.observe(item):
                 self._attempt_reservation(item)
+                if item.reservation_status == "reserved":
+                    self.reservations.remove(item.item_id)
+                    if self.notifiers:
+                        self.notifiers.send(ReservationObj(item.item_id, 1, item.display_name))
                 self._send_messages(item)
                 self.metrics.send_notifications.labels(item.item_id, item.display_name).inc()
             self.metrics.update(item)
@@ -163,14 +168,19 @@ class Scanner:
     def _attempt_reservation(self, item: Item) -> None:
         if not self.reservations.is_queued(item.item_id):
             return
+        log.info("Reserving 1 bag for %s", item.display_name)
         try:
+            if self.tgtg_client.session:
+                self.tgtg_client.session.last_api_request = None
             order = self.tgtg_client.create_order(item.item_id, 1)
             item.reservation_status = "reserved"
             item.reservation_amount = 1
             self.reservations.register_order(order["id"], item.item_id, 1, item.display_name)
+            log.info("Reserved 1 bag for %s (order_id=%s)", item.display_name, order["id"])
         except TgtgAPIError as err:
             item.reservation_status = "failed"
             item.reservation_error = str(err)
+            log.warning("Reservation failed for %s: %s", item.display_name, err)
 
     def _send_messages(self, item: Item) -> None:
         """Send notifications for Item."""

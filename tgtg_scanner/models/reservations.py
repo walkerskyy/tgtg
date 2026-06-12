@@ -42,8 +42,17 @@ class Reservations:
         try:
             with self._persist_path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
-            self.reservation_query = [Reservation(**r) for r in data]
-            log.info("Loaded %d reservations from %s", len(self.reservation_query), self._persist_path)
+            if isinstance(data, list):
+                self.reservation_query = [Reservation(**r) for r in data]
+            else:
+                self.reservation_query = [Reservation(**r) for r in data.get("reservation_query", [])]
+                self.active_orders = {o["id"]: Order(**o) for o in data.get("active_orders", [])}
+            log.info(
+                "Loaded %d reservations + %d orders from %s",
+                len(self.reservation_query),
+                len(self.active_orders),
+                self._persist_path,
+            )
         except (json.JSONDecodeError, OSError) as err:
             log.error("Failed to load reservations: %s", err)
 
@@ -53,12 +62,20 @@ class Reservations:
         try:
             self._persist_path.parent.mkdir(parents=True, exist_ok=True)
             with self._persist_path.open("w", encoding="utf-8") as f:
-                json.dump([asdict(r) for r in self.reservation_query], f, indent=2)
+                json.dump(
+                    {
+                        "reservation_query": [asdict(r) for r in self.reservation_query],
+                        "active_orders": [asdict(o) for o in self.active_orders.values()],
+                    },
+                    f,
+                    indent=2,
+                )
         except OSError as err:
             log.error("Failed to save reservations: %s", err)
 
     def register_order(self, order_id: str, item_id: str, amount: int, display_name: str) -> None:
         self.active_orders[order_id] = Order(order_id, item_id, amount, display_name)
+        self._save()
 
     def reserve(self, item_id: str, display_name: str, amount: int = 1) -> None:
         """Create a new reservation.
@@ -111,22 +128,33 @@ class Reservations:
         for reservation in list(self.reservation_query):
             item = state.get(reservation.item_id)
             if item and item.items_available > 0 and item.reservation_status is None:
+                log.info("Processing queued reservation for %s", reservation.display_name)
                 try:
                     self._create_order(reservation)
+                    item.reservation_status = "reserved"
                     callback(reservation)
+                    self.remove(reservation.item_id)
+                    log.info("Reservation completed for %s and removed from queue", reservation.display_name)
                 except Exception as exc:
-                    log.warning("Order failed: %s", exc)
+                    log.warning("Order failed for %s: %s", reservation.display_name, exc)
 
     def update_active_orders(self) -> None:
         """Remove orders that are not active anymore."""
+        changed = False
         for order_id in list(self.active_orders):
             res = self.client.get_order_status(order_id)
             if res.get("state") != "RESERVED":
                 del self.active_orders[order_id]
+                changed = True
+        if changed:
+            self._save()
 
     def cancel_order(self, order_id: str) -> None:
         """Cancel an order."""
         self.client.abort_order(order_id)
+        if order_id in self.active_orders:
+            del self.active_orders[order_id]
+            self._save()
 
     def cancel_all_orders(self) -> None:
         """Cancel all active orders."""
@@ -134,6 +162,9 @@ class Reservations:
             self.cancel_order(order_id)
 
     def _create_order(self, reservation: Reservation) -> None:
+        if self.client.session:
+            self.client.session.last_api_request = None
+        log.info("Creating order for %s (qty=%d)", reservation.display_name, reservation.amount)
         res = self.client.create_order(reservation.item_id, reservation.amount)
         order_id = res.get("id")
         if order_id:
@@ -143,3 +174,5 @@ class Reservations:
                 reservation.amount,
                 reservation.display_name,
             )
+            self._save()
+            log.info("Order created for %s (order_id=%s)", reservation.display_name, order_id)
