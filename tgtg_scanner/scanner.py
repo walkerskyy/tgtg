@@ -194,11 +194,26 @@ class Scanner:
         )
         self.notifiers.send(item)
 
+    def _login_or_reauth(self) -> None:
+        """Login to TGTG API. If token refresh fails and email is configured, re-authenticate."""
+        try:
+            self.tgtg_client.login()
+        except TgtgAPIError as err:
+            if not self.tgtg_client.email:
+                log.error("Token refresh failed and no email configured for re-authentication: %s", err)
+                raise
+            log.warning("Token refresh failed, re-authenticating with %s...", self.tgtg_client.email)
+            self.tgtg_client.access_token = None
+            self.tgtg_client.refresh_token = None
+            self.tgtg_client.cookie = None
+            self.tgtg_client.session.cookies.clear()
+            self.tgtg_client.login()
+        self._save_tokens()
+
     def run(self) -> NoReturn:
         """Main Loop of the Scanner."""
         # test tgtg API
-        self.tgtg_client.login()
-        self._save_tokens()
+        self._login_or_reauth()
         # activate location service
         self.location = Location(
             self.config.location.enabled,

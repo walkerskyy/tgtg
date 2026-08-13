@@ -9,6 +9,7 @@ import pytest
 import responses
 import tgtg
 from pytest_mock.plugin import MockerFixture
+from tgtg.exceptions import TgtgAPIError
 
 from tgtg_scanner.models import Config
 from tgtg_scanner.tgtg_client import TgtgClient, extract_datadome, normalize_cookie, resolve_user_agent
@@ -153,3 +154,23 @@ def test_tgtg_api(item_properties: dict):
     client.set_favorite(item_id, False)
     client.set_favorite(item_id, True)
     assert client.get_item(item_id).get("item", {}).get("item_id") == item_id
+
+
+@responses.activate
+def test_login_raises_when_refresh_fails_without_email():
+    """When no email configured and refresh fails, TgtgAPIError propagates."""
+    _datadome_sdk()
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, tgtg.REFRESH_ENDPOINT),
+        status=403,
+        body='{"url":"https://geo.captcha-delivery.com/interstitial/..."}',
+    )
+    client = TgtgClient(
+        access_token="stale_at",
+        refresh_token="stale_rt",
+        cookie=normalize_cookie("stale_dd"),
+        user_agent="TGTG/test",
+    )
+    with pytest.raises(TgtgAPIError):
+        client.login()

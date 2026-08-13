@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import json
 import logging
 import re
+import sys
+import webbrowser
 from collections.abc import Iterator
 
 import tgtg
@@ -102,6 +105,79 @@ class TgtgClient(_UpstreamTgtgClient):
         pin = prompt_via_browser(email=self.email, port=self.pin_port) or ""
         with _patched_input(pin):
             super().start_polling(polling_id)
+
+    def _post(self, url, **kwargs):
+        """POST with DataDome captcha fallback.
+
+        First try upstream's SDK cookie approach. If that still returns 403
+        with a DataDome interstitial, open the captcha in the browser and
+        prompt the user to paste the fresh datadome cookie.
+        """
+        # Upstream _post: ensure SDK cookie, POST, on 403 clear + retry once
+        response = super()._post(url, **kwargs)
+        if response.status_code != 403:
+            return response
+
+        # Check if it's a DataDome captcha interstitial
+        try:
+            body = response.json()
+            captcha_url = body.get("url", "")
+        except (json.JSONDecodeError, AttributeError):
+            return response
+
+        if "captcha-delivery.com" not in captcha_url:
+            return response
+
+        # DataDome captcha detected — try to open in browser
+        log.warning("DataDome captcha challenge received.")
+        try:
+            webbrowser.open(captcha_url)
+            log.info("Opened captcha in browser. If it didn't open, visit:\n  %s", captcha_url)
+        except Exception:
+            log.warning("Could not open browser. Please visit this URL manually:\n  %s", captcha_url)
+
+        # Prompt user for the datadome cookie
+        if not sys.stdin.isatty():
+            log.warning("Non-interactive session — cannot prompt for datadome cookie.")
+            return response
+
+        sys.stdout.write(
+            "Solve the captcha, then copy the 'datadome' cookie value "
+            "from your browser (e.g. via DevTools → Application → Cookies) "
+            "and paste it here:\n> "
+        )
+        sys.stdout.flush()
+        try:
+            fresh_cookie = sys.stdin.readline().strip()
+        except (EOFError, KeyboardInterrupt):
+            return response
+
+        if not fresh_cookie:
+            return response
+
+        # Strip wrapping if user pasted full "datadome=xxx" or "datadome=xxx; ..."
+        match = _DATADOME_RE.search(fresh_cookie)
+        if match:
+            fresh_cookie = match.group(1)
+
+        domain = tgtg.urlsplit(self.base_url).hostname
+        self.session.cookies.set(
+            "datadome",
+            fresh_cookie,
+            domain=f".{domain}",
+            path="/",
+            secure=True,
+        )
+        self.cookie = f"datadome={fresh_cookie}"
+
+        # Retry the request with the fresh cookie
+        return self.session.post(
+            url,
+            headers=self._headers,
+            proxies=self.proxies,
+            timeout=self.timeout,
+            **kwargs,
+        )
 
     def get_favorites(self, **kwargs) -> list[dict]:
         """Fetch all favorites via upstream paging (page_size 100)."""

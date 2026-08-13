@@ -46,3 +46,27 @@ def test_auto_reserve_skips_unlisted_item(scanner: Scanner, test_item: Item, moc
 
     assert test_item.reservation_status is None
     mock_create_order.assert_not_called()
+
+
+def test_login_reauth_on_refresh_failure(scanner: Scanner, mocker: MockerFixture):
+    """When login fails with TgtgAPIError and email is set, scanner re-authenticates."""
+    login_mock = mocker.patch.object(scanner.tgtg_client, "login")
+    login_mock.side_effect = [TgtgAPIError(403, b"datadome challenge"), None]
+    scanner.tgtg_client.email = "test@example.com"
+    save_mock = mocker.patch.object(scanner, "_save_tokens")
+
+    scanner._login_or_reauth()
+
+    assert login_mock.call_count == 2
+    assert scanner.tgtg_client.access_token is None
+    assert scanner.tgtg_client.refresh_token is None
+    save_mock.assert_called()
+
+
+def test_login_no_reauth_without_email(scanner: Scanner, mocker: MockerFixture):
+    """When login fails and no email is set, TgtgAPIError propagates."""
+    mocker.patch.object(scanner.tgtg_client, "login", side_effect=TgtgAPIError(403, b"challenge"))
+    scanner.tgtg_client.email = None
+
+    with pytest.raises(TgtgAPIError):
+        scanner._login_or_reauth()
