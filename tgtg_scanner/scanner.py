@@ -18,8 +18,8 @@ from tgtg_scanner.models import (
     Reservations,
 )
 from tgtg_scanner.models.drop_history import DropHistory
+from tgtg_scanner.models.reservations import Order, is_sold_out_error
 from tgtg_scanner.models.reservations import Reservation as ReservationObj
-from tgtg_scanner.models.reservations import is_sold_out_error
 from tgtg_scanner.models.stock_monitor import StockMonitor
 from tgtg_scanner.notifiers import Notifiers
 from tgtg_scanner.tgtg_client import BASE_URL, TgtgClient, extract_datadome, normalize_cookie, resolve_user_agent
@@ -186,10 +186,13 @@ class Scanner:
 
     def _process_order_events(self) -> None:
         """Poll tracked orders and notify on purchase/unpaid/terminal events."""
-        for order in self.reservations.process_active_orders():
-            self._notify_order_event(order)
+        try:
+            for order in self.reservations.process_active_orders():
+                self._notify_order_event(order)
+        except Exception as exc:
+            log.warning("Failed to process order events: %s", exc)
 
-    def _notify_order_event(self, order) -> None:
+    def _notify_order_event(self, order: Order) -> None:
         if self.notifiers:
             self.notifiers.send(ReservationObj(order.item_id, order.amount, order.display_name, status=order.status))
 

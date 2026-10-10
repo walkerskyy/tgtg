@@ -58,7 +58,7 @@ def _order_from_dict(data: dict) -> Order:
         amount=int(data.get("amount", 1)),
         display_name=data.get("display_name", ""),
         status=data.get("status"),
-        created_at=data.get("created_at"),
+        created_at=int(data["created_at"]) if data.get("created_at") is not None else None,
     )
 
 

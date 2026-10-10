@@ -203,6 +203,7 @@ def test_process_order_events_sends_reservation_notifications(scanner: Scanner, 
 
 
 def test_job_calls_process_order_events(scanner: Scanner, mocker: MockerFixture):
+    mocker.patch.object(scanner, "_load_items", return_value=[])
     mocker.patch.object(scanner, "_process_items")
     mocker.patch.object(scanner, "_save_tokens")
     scanner.notifiers = mocker.MagicMock()
