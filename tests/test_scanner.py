@@ -185,3 +185,30 @@ def test_unqueued_transition_does_not_record_drop(scanner: Scanner, test_item: I
 
     mock_record.assert_not_called()
     mock_create.assert_not_called()
+
+
+def test_process_order_events_sends_reservation_notifications(scanner: Scanner, mocker: MockerFixture):
+    from tgtg_scanner.models.reservations import Order
+
+    order = Order("o1", "123", 1, "Bakery", status="CONFIRMED", created_at=1)
+    scanner.notifiers = mocker.MagicMock()
+    mocker.patch.object(scanner.reservations, "process_active_orders", return_value=[order])
+
+    scanner._process_order_events()
+
+    sent = scanner.notifiers.send.call_args[0][0]  # type: ignore[union-attr]
+    assert sent.item_id == "123"
+    assert sent.status == "CONFIRMED"
+    assert sent.display_name == "Bakery"
+
+
+def test_job_calls_process_order_events(scanner: Scanner, mocker: MockerFixture):
+    mocker.patch.object(scanner, "_process_items")
+    mocker.patch.object(scanner, "_save_tokens")
+    scanner.notifiers = mocker.MagicMock()
+    mocker.patch.object(scanner.reservations, "make_orders")
+    mock_events = mocker.patch.object(scanner, "_process_order_events")
+
+    scanner._job()
+
+    mock_events.assert_called_once()

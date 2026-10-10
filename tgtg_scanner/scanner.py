@@ -157,6 +157,8 @@ class Scanner:
         if not self.monitor.state:
             log.warning("No items in observation! Did you add any favorites?")
 
+        self._process_order_events()
+
         self._save_tokens()
 
     def _process_items(self, items: list[Item]) -> None:
@@ -181,6 +183,15 @@ class Scanner:
                 self._send_messages(item)
                 self.metrics.send_notifications.labels(item.item_id, item.display_name).inc()
             self.metrics.update(item)
+
+    def _process_order_events(self) -> None:
+        """Poll tracked orders and notify on purchase/unpaid/terminal events."""
+        for order in self.reservations.process_active_orders():
+            self._notify_order_event(order)
+
+    def _notify_order_event(self, order) -> None:
+        if self.notifiers:
+            self.notifiers.send(ReservationObj(order.item_id, order.amount, order.display_name, status=order.status))
 
     def _attempt_reservation(self, item: Item) -> None:
         reservation = self.reservations.get_reservation(item.item_id)
