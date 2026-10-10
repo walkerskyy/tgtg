@@ -163,13 +163,16 @@ class Telegram(Notifier):
             asyncio.set_event_loop(loop)
             self.application = ApplicationBuilder().token(self.token).arbitrary_callback_data(True).build()
             self.application.add_error_handler(self._error)
-            await self.application.bot.set_my_commands([])
+            try:
+                await self.application.bot.set_my_commands([])
+            except TelegramError as exc:
+                log.warning("Telegram failed clearing commands: %s", exc)
             if not self.disable_commands:
                 try:
                     await self._start_polling()
                 except Exception as exc:
+                    # Continue without command handlers; notifications still work.
                     log.error("Telegram failed starting polling: %s", exc)
-                    return
             while True:
                 try:
                     item = self.queue.get(block=False)

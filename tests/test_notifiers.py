@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 import responses
 from pytest_mock.plugin import MockerFixture
+from telegram.error import TimedOut
 
 from tgtg_scanner.models import Config, Cron, Favorites, Item, Reservations
 from tgtg_scanner.notifiers.apprise import Apprise
@@ -322,6 +323,37 @@ def test_telegram(test_item: Item, reservations: Reservations, favorites: Favori
     telegram.send(test_item)
     sleep(0.5)
     assert telegram.thread.is_alive()
+    telegram.stop()
+    assert not telegram.thread.is_alive()
+
+
+def test_telegram_survives_startup_timeout(
+    test_item: Item, reservations: Reservations, favorites: Favorites, mocked_telegram: MockerFixture
+):
+    """A transient timeout in the non-essential set_my_commands call must not kill the notifier thread.
+
+    Reproduces a crash on a flaky connection where set_my_commands([]) raised
+    TimedOut during thread startup, killing the thread before any notification
+    could be sent.
+    """
+    mocked_telegram.patch("telegram.ext.ExtBot.set_my_commands", side_effect=TimedOut("Simulated startup timeout"))
+    send_message = mocked_telegram.patch("telegram.Bot.send_message", return_value=None)
+
+    config = Config()
+    config.telegram.enabled = True
+    config.telegram.token = "1234567890:ABCDEF"
+    config.telegram.cron = Cron()
+    config.telegram.chat_ids = ["123456"]
+    config.telegram.disable_commands = False
+    config.telegram.body = "New Magic Bags: ${{items_available}}"
+    config.telegram.image = None
+
+    telegram = Telegram(config, reservations, favorites)
+    telegram.start()
+    telegram.send(test_item)
+    sleep(1)
+    assert telegram.thread.is_alive()
+    send_message.assert_called_once()
     telegram.stop()
     assert not telegram.thread.is_alive()
 
