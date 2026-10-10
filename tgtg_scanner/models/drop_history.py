@@ -38,7 +38,7 @@ class DropHistory:
                 for item_id, timestamps in data.items()
                 if isinstance(timestamps, list)
             }
-        except (json.JSONDecodeError, OSError, ValueError) as err:
+        except (json.JSONDecodeError, OSError, ValueError, TypeError, OverflowError) as err:
             log.error("Failed to load drop history: %s", err)
             self._quarantine()
 
@@ -57,8 +57,10 @@ class DropHistory:
             return
         try:
             self._persist_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._persist_path.open("w", encoding="utf-8") as f:
+            tmp_path = self._persist_path.with_name(f"{self._persist_path.name}.tmp")
+            with tmp_path.open("w", encoding="utf-8") as f:
                 json.dump(self._events, f, indent=2)
+            tmp_path.replace(self._persist_path)
         except OSError as err:
             log.error("Failed to save drop history: %s", err)
 

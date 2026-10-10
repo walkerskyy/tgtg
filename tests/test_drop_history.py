@@ -72,6 +72,23 @@ def test_corrupt_file_quarantined(tmp_path: Path):
     assert len(quarantined) == 1
 
 
+def test_corrupt_shapes_quarantined_not_crash(tmp_path: Path):
+    for content in ('{"123": [null]}', '{"123": [[1]]}', '{"123": [1e999]}'):
+        sub = tmp_path / f"case_{abs(hash(content))}"
+        sub.mkdir()
+        (sub / DROP_HISTORY_FILE).write_text(content)
+        h = DropHistory(str(sub))  # must not raise
+        assert h._events == {}
+        assert list(sub.glob(f"{DROP_HISTORY_FILE}.corrupt-*"))
+
+
+def test_save_leaves_no_tmp_file(tmp_path: Path):
+    h = DropHistory(str(tmp_path))
+    h.record("123", 1000)
+    assert not list(tmp_path.glob("*.tmp"))
+    assert (tmp_path / DROP_HISTORY_FILE).is_file()
+
+
 def test_no_persist_dir(tmp_path: Path):
     h = DropHistory(None)
     h.record("123", 1000)  # must not raise
