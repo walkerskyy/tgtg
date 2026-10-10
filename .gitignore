@@ -21,3 +21,6 @@ out.toml
 out.yaml
 dev.py
 compose.yml
+accessToken
+refreshToken
+datadome

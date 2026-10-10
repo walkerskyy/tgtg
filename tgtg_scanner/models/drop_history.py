@@ -74,6 +74,7 @@ class DropHistory:
         ts = int(timestamp if timestamp is not None else time.time())
         events = self._events.setdefault(item_id, [])
         if events and 0 <= ts - events[-1] < DEDUPE_WINDOW:
+            log.debug("Deduped drop event for %s (within %ds of previous)", item_id, DEDUPE_WINDOW)
             return
         events.append(ts)
         del events[:-MAX_EVENTS]

@@ -171,3 +171,17 @@ def test_price_drop_notify_does_not_record_drop(scanner: Scanner, test_item: Ite
     mock_record.assert_not_called()
     # _attempt_reservation only runs when observe() returned True (price-drop notify)
     assert new_item.reservation_status == "reserved"
+
+
+def test_unqueued_transition_does_not_record_drop(scanner: Scanner, test_item: Item, tgtg_item: dict, mocker: MockerFixture):
+    scanner.monitor.state[test_item.item_id] = Item(dict(tgtg_item, items_available=0))
+    mocker.patch.object(scanner, "_load_items", return_value=[test_item])
+    mocker.patch.object(scanner, "_send_messages")
+    scanner.notifiers = mocker.MagicMock()
+    mock_record = mocker.patch.object(scanner.drop_history, "record")
+    mock_create = mocker.patch.object(scanner.tgtg_client, "create_order")
+
+    scanner._job()
+
+    mock_record.assert_not_called()
+    mock_create.assert_not_called()
