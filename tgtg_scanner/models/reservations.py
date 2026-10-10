@@ -279,18 +279,28 @@ class Reservations:
         return pruned
 
     def cancel_order(self, order_id: str) -> None:
-        """Cancel an order."""
+        """Cancel an unpaid active order. CONFIRMED (paid) orders cannot be aborted."""
+        order = self.active_orders.get(order_id)
+        if order is not None and order.status == "CONFIRMED":
+            log.warning("Refusing to cancel confirmed (paid) order %s", order_id)
+            return
         self.client.abort_order(order_id)
         if order_id in self.active_orders:
             del self.active_orders[order_id]
             self._save()
 
-    def cancel_all_orders(self) -> None:
-        """Cancel all cancelable (unpaid) active orders."""
+    def cancel_all_orders(self) -> tuple[int, int]:
+        """Cancel all unpaid active orders. Returns (cancelled, skipped_paid)."""
+        cancelled = 0
+        skipped = 0
         for order_id, order in list(self.active_orders.items()):
             if order.status == "CONFIRMED":
+                skipped += 1
+                log.info("Skipping confirmed (paid) order %s", order_id)
                 continue
             self.cancel_order(order_id)
+            cancelled += 1
+        return cancelled, skipped
 
     def _create_order(self, reservation: Reservation) -> None:
         if self.client.session:

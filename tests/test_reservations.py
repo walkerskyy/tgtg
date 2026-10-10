@@ -105,10 +105,18 @@ def test_cancel_all_orders(reservations: Reservations):
 def test_cancel_all_orders_skips_confirmed(reservations: Reservations):
     reservations.active_orders["paid"] = Order("paid", "1", 1, "Paid", status="CONFIRMED", created_at=int(time.time()))
     reservations.active_orders["unpaid"] = Order("unpaid", "2", 1, "Unpaid", status="RESERVED", created_at=int(time.time()))
-    reservations.cancel_all_orders()
+    cancelled, skipped = reservations.cancel_all_orders()
     reservations.client.abort_order.assert_called_once_with("unpaid")  # type: ignore[attr-defined]
     assert "paid" in reservations.active_orders
     assert "unpaid" not in reservations.active_orders
+    assert (cancelled, skipped) == (1, 1)
+
+
+def test_cancel_order_refuses_confirmed(reservations: Reservations):
+    reservations.active_orders["paid"] = Order("paid", "1", 1, "Paid", status="CONFIRMED", created_at=int(time.time()))
+    reservations.cancel_order("paid")
+    reservations.client.abort_order.assert_not_called()  # type: ignore[attr-defined]
+    assert "paid" in reservations.active_orders
 
 
 def test_reservation_with_schedule_and_amount_roundtrip(tmp_path: Path):

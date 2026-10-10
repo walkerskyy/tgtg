@@ -321,16 +321,19 @@ class Telegram(Notifier):
             if order.status != "CONFIRMED"
         ]
         if len(buttons) == 0:
-            await update.message.reply_text("No active Orders")
+            await update.message.reply_text("No cancelable Orders")
             return
         reply_markup = InlineKeyboardMarkup(buttons)
         await update.message.reply_text("Active Orders. Select to cancel.", reply_markup=reply_markup)
 
     @_private
     async def _cancel_all_orders(self, update: Update, _) -> None:
-        self.reservations.cancel_all_orders()
-        await update.message.reply_text("Cancelled all active Orders")
-        log.debug("Cancelled all active Orders")
+        cancelled, skipped = self.reservations.cancel_all_orders()
+        message = f"Cancelled {cancelled} unpaid Order(s)"
+        if skipped:
+            message += f", left {skipped} paid Order(s) untouched"
+        await update.message.reply_text(message)
+        log.debug("%s", message)
 
     @_private
     async def _list_favorites(self, update: Update, _) -> None:

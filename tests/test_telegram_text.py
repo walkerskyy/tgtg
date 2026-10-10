@@ -27,3 +27,45 @@ def test_unpaid_warning_text():
 def test_terminal_text():
     r = Reservation("1", 1, "Bakery", status="CANCELED")
     assert "CANCELED" in Telegram._reservation_text(r)
+
+
+def test_orders_menu_hides_confirmed():
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from tgtg_scanner.models.reservations import Order
+
+    telegram = object.__new__(Telegram)
+    telegram.reservations = MagicMock()
+    telegram.reservations.active_orders = {
+        "paid": Order("paid", "1", 1, "Paid", status="CONFIRMED", created_at=1),
+        "unpaid": Order("unpaid", "2", 1, "Unpaid", status="RESERVED", created_at=1),
+    }
+    telegram._is_my_chat = lambda update: True  # type: ignore[method-assign]
+    update = MagicMock()
+    update.message.reply_text = AsyncMock()
+
+    asyncio.run(telegram._cancel_orders_menu(update, None))
+
+    update.message.reply_text.assert_called_once()
+    _, kwargs = update.message.reply_text.call_args
+    buttons = [btn for row in kwargs["reply_markup"].inline_keyboard for btn in row]
+    assert [b.text for b in buttons] == ["Unpaid"]
+
+
+def test_orders_menu_only_confirmed_shows_empty():
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from tgtg_scanner.models.reservations import Order
+
+    telegram = object.__new__(Telegram)
+    telegram.reservations = MagicMock()
+    telegram.reservations.active_orders = {"paid": Order("paid", "1", 1, "Paid", status="CONFIRMED", created_at=1)}
+    telegram._is_my_chat = lambda update: True  # type: ignore[method-assign]
+    update = MagicMock()
+    update.message.reply_text = AsyncMock()
+
+    asyncio.run(telegram._cancel_orders_menu(update, None))
+
+    update.message.reply_text.assert_called_once_with("No cancelable Orders")
