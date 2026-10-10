@@ -31,7 +31,7 @@ def test_record_and_predict_two_events_same_slot(tmp_path: Path):
 def test_adjacent_slot_counts(tmp_path: Path):
     h = DropHistory(str(tmp_path))
     h.record("123", _ts(0, 17, 0))  # slot for 17:00
-    h.record("123", _ts(0, 17, 0))
+    h.record("123", _ts(0, 17, 1))  # same slot, 60s later (beyond dedupe window)
     # 16:55 is in the previous slot -> adjacent -> still in window
     assert h.in_predicted_window("123", datetime(2026, 10, 5, 16, 55))
 
@@ -57,10 +57,10 @@ def test_persistence_roundtrip(tmp_path: Path):
 def test_trim_to_max_events(tmp_path: Path):
     h = DropHistory(str(tmp_path))
     for i in range(MAX_EVENTS + 25):
-        h.record("123", i)
+        h.record("123", i * 10)  # 10s apart: beyond the 5s dedupe window
     data = json.loads((tmp_path / DROP_HISTORY_FILE).read_text())
     assert len(data["123"]) == MAX_EVENTS
-    assert data["123"][-1] == MAX_EVENTS + 24
+    assert data["123"][-1] == (MAX_EVENTS + 24) * 10
 
 
 def test_corrupt_file_quarantined(tmp_path: Path):
@@ -93,3 +93,29 @@ def test_no_persist_dir(tmp_path: Path):
     h = DropHistory(None)
     h.record("123", 1000)  # must not raise
     assert not h.in_predicted_window("999")
+
+
+def test_record_dedupes_within_window(tmp_path: Path):
+    h = DropHistory(str(tmp_path))
+    h.record("123", 1000)
+    h.record("123", 1003)  # 3s later: double-signal race -> deduped
+    data = json.loads((tmp_path / DROP_HISTORY_FILE).read_text())
+    assert data["123"] == [1000]
+
+
+def test_record_kept_beyond_window(tmp_path: Path):
+    h = DropHistory(str(tmp_path))
+    h.record("123", 1000)
+    h.record("123", 1003)  # deduped
+    h.record("123", 1010)  # 10s after first -> distinct drop
+    data = json.loads((tmp_path / DROP_HISTORY_FILE).read_text())
+    assert data["123"] == [1000, 1010]
+
+
+def test_dedupe_independent_per_item(tmp_path: Path):
+    h = DropHistory(str(tmp_path))
+    h.record("a", 1000)
+    h.record("b", 1001)  # different item, same instant -> still recorded
+    data = json.loads((tmp_path / DROP_HISTORY_FILE).read_text())
+    assert data["a"] == [1000]
+    assert data["b"] == [1001]

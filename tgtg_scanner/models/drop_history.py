@@ -11,6 +11,7 @@ MAX_EVENTS = 100
 SLOT_MINUTES = 15
 SLOTS_PER_DAY = 96  # 24 * 60 / 15
 MIN_EVENTS_FOR_PREDICTION = 2
+DEDUPE_WINDOW = 5  # seconds; collapse the transition + lost-race double signal
 
 
 class DropHistory:
@@ -65,9 +66,15 @@ class DropHistory:
             log.error("Failed to save drop history: %s", err)
 
     def record(self, item_id: str, timestamp: int | None = None) -> None:
-        """Record a drop event (observed transition or lost race) for an item."""
+        """Record a drop event (observed transition or lost race) for an item.
+
+        Events for the same item within DEDUPE_WINDOW of the previous one are
+        skipped: a lost race fires both signals milliseconds apart.
+        """
         ts = int(timestamp if timestamp is not None else time.time())
         events = self._events.setdefault(item_id, [])
+        if events and 0 <= ts - events[-1] < DEDUPE_WINDOW:
+            return
         events.append(ts)
         del events[:-MAX_EVENTS]
         self._save()
