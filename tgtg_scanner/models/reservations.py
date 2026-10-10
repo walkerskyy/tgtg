@@ -1,13 +1,25 @@
 import json
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from tgtg_scanner.models.item import Item
+from tgtg_scanner.models.schedule import Schedule
 from tgtg_scanner.tgtg_client import TgtgClient
 
 log = logging.getLogger("tgtg")
+
+UNPAID_WARNING = "UNPAID_WARNING"
+PAYMENT_DEADLINE = 270  # seconds; TGTG reservation hold is ~5 minutes
+SOLD_OUT_MARKERS = ("sold out", "no longer available", "not available", "out of stock")
+
+
+def is_sold_out_error(err: Exception) -> bool:
+    """Heuristic: does this create_order failure mean we lost the race?"""
+    msg = str(err).lower()
+    return any(marker in msg for marker in SOLD_OUT_MARKERS)
 
 
 @dataclass
@@ -16,6 +28,8 @@ class Order:
     item_id: str
     amount: int
     display_name: str
+    status: str | None = None
+    created_at: int | None = None
 
 
 @dataclass
@@ -23,6 +37,28 @@ class Reservation:
     item_id: str
     amount: int
     display_name: str
+    schedule: Schedule | None = None
+    status: str | None = None
+
+
+def _reservation_from_dict(data: dict) -> Reservation:
+    return Reservation(
+        item_id=data["item_id"],
+        amount=int(data.get("amount", 1)),
+        display_name=data.get("display_name", ""),
+        schedule=Schedule.parse(data.get("schedule")),
+    )
+
+
+def _order_from_dict(data: dict) -> Order:
+    return Order(
+        id=data["id"],
+        item_id=data.get("item_id", ""),
+        amount=int(data.get("amount", 1)),
+        display_name=data.get("display_name", ""),
+        status=data.get("status"),
+        created_at=data.get("created_at"),
+    )
 
 
 RESERVATIONS_FILE = "reservations.json"
@@ -42,19 +78,34 @@ class Reservations:
         try:
             with self._persist_path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
+            if not isinstance(data, (list, dict)):
+                raise ValueError(f"expected list or object, got {type(data).__name__}")
             if isinstance(data, list):
-                self.reservation_query = [Reservation(**r) for r in data]
+                entries, orders = data, []
             else:
-                self.reservation_query = [Reservation(**r) for r in data.get("reservation_query", [])]
-                self.active_orders = {o["id"]: Order(**o) for o in data.get("active_orders", [])}
+                entries, orders = data.get("reservation_query", []), data.get("active_orders", [])
+            self.reservation_query = [_reservation_from_dict(r) for r in entries]
+            self.active_orders = {o["id"]: _order_from_dict(o) for o in orders}
             log.info(
                 "Loaded %d reservations + %d orders from %s",
                 len(self.reservation_query),
                 len(self.active_orders),
                 self._persist_path,
             )
-        except (json.JSONDecodeError, OSError) as err:
+        except (json.JSONDecodeError, OSError, ValueError, KeyError, TypeError) as err:
             log.error("Failed to load reservations: %s", err)
+            self._quarantine()
+
+    def _quarantine(self) -> None:
+        if self._persist_path and self._persist_path.is_file():
+            target = self._persist_path.with_name(f"{self._persist_path.name}.corrupt-{int(time.time())}")
+            try:
+                self._persist_path.rename(target)
+                log.warning("Quarantined corrupt reservations file to %s", target)
+            except OSError as err:
+                log.error("Failed to quarantine %s: %s", self._persist_path, err)
+        self.reservation_query = []
+        self.active_orders = {}
 
     def _save(self) -> None:
         if not self._persist_path:
@@ -74,7 +125,9 @@ class Reservations:
             log.error("Failed to save reservations: %s", err)
 
     def register_order(self, order_id: str, item_id: str, amount: int, display_name: str) -> None:
-        self.active_orders[order_id] = Order(order_id, item_id, amount, display_name)
+        self.active_orders[order_id] = Order(
+            order_id, item_id, amount, display_name, status="RESERVED", created_at=int(time.time())
+        )
         self._save()
 
     def reserve(self, item_id: str, display_name: str, amount: int = 1) -> None:
@@ -114,6 +167,13 @@ class Reservations:
         """
         return any(r.item_id == item_id for r in self.reservation_query)
 
+    def get_reservation(self, item_id: str) -> Reservation | None:
+        """Return the first queued reservation for item_id, or None."""
+        for r in self.reservation_query:
+            if r.item_id == item_id:
+                return r
+        return None
+
     def make_orders(self, state: dict[str, Item], callback: Callable[[Reservation], None]) -> None:
         """Create orders for reservations.
 
@@ -126,6 +186,9 @@ class Reservations:
 
         """
         for reservation in list(self.reservation_query):
+            if reservation.schedule is not None and not reservation.schedule.is_now():
+                log.debug("Reservation for %s outside schedule window - skipping", reservation.display_name)
+                continue
             item = state.get(reservation.item_id)
             if item and item.items_available > 0 and item.reservation_status is None:
                 log.info("Processing queued reservation for %s", reservation.display_name)
@@ -173,6 +236,8 @@ class Reservations:
                 reservation.item_id,
                 reservation.amount,
                 reservation.display_name,
+                status="RESERVED",
+                created_at=int(time.time()),
             )
             self._save()
             log.info("Order created for %s (order_id=%s)", reservation.display_name, order_id)

@@ -5,6 +5,7 @@ import pytest
 
 from tgtg_scanner.models.item import Item
 from tgtg_scanner.models.reservations import Order, Reservation, Reservations
+from tgtg_scanner.models.schedule import Schedule
 
 
 @pytest.fixture(scope="function")
@@ -109,3 +110,104 @@ def test_cancel_all_orders(reservations: Reservations):
     order2 = Order("2", "123", 2, "Test Item 2")
     reservations.active_orders = {order1.id: order1, order2.id: order2}
     reservations.cancel_all_orders()
+
+
+def test_reservation_with_schedule_and_amount_roundtrip(tmp_path: Path):
+    mock_client = MagicMock()
+    r1 = Reservations(mock_client, str(tmp_path))
+    schedule = Schedule.parse({"days": [1, 2], "windows": ["16:00-20:00"]})
+    r1.reservation_query.append(Reservation("123", 2, "Test Item", schedule=schedule))
+    r1._save()
+
+    r2 = Reservations(mock_client, str(tmp_path))
+    loaded = r2.reservation_query[0]
+    assert loaded.amount == 2
+    assert loaded.schedule is not None
+    assert loaded.schedule.days == [1, 2]
+    assert loaded.schedule.windows == ["16:00-20:00"]
+
+
+def test_order_with_status_created_at_roundtrip(tmp_path: Path):
+    mock_client = MagicMock()
+    r1 = Reservations(mock_client, str(tmp_path))
+    r1.active_orders["o1"] = Order("o1", "123", 1, "Test", status="RESERVED", created_at=123)
+    r1._save()
+
+    r2 = Reservations(mock_client, str(tmp_path))
+    o = r2.active_orders["o1"]
+    assert o.status == "RESERVED"
+    assert o.created_at == 123
+
+
+def test_legacy_array_load_defaults(tmp_path: Path):
+    mock_client = MagicMock()
+    (tmp_path / "reservations.json").write_text('[{"item_id": "1", "amount": 1, "display_name": "A"}]')
+    r = Reservations(mock_client, str(tmp_path))
+    assert len(r.reservation_query) == 1
+    assert r.reservation_query[0].schedule is None
+    assert r.reservation_query[0].amount == 1
+
+
+def test_entry_missing_amount_defaults_to_1(tmp_path: Path):
+    mock_client = MagicMock()
+    (tmp_path / "reservations.json").write_text(
+        '{"reservation_query": [{"item_id": "1", "display_name": "A"}], "active_orders": []}'
+    )
+    r = Reservations(mock_client, str(tmp_path))
+    assert r.reservation_query[0].amount == 1
+
+
+def test_malformed_schedule_treated_as_no_schedule(tmp_path: Path):
+    mock_client = MagicMock()
+    (tmp_path / "reservations.json").write_text(
+        '{"reservation_query": [{"item_id": "1", "amount": 1, "display_name": "A", '
+        '"schedule": {"windows": ["bogus"]}}], "active_orders": []}'
+    )
+    r = Reservations(mock_client, str(tmp_path))
+    assert r.reservation_query[0].schedule is None
+
+
+def test_corrupt_reservations_file_quarantined(tmp_path: Path):
+    mock_client = MagicMock()
+    path = tmp_path / "reservations.json"
+    path.write_text("{broken")
+    r = Reservations(mock_client, str(tmp_path))
+    assert r.reservation_query == []
+    assert list(tmp_path.glob("reservations.json.corrupt-*"))
+
+
+def test_get_reservation(reservations: Reservations):
+    reservations.reserve("123", "Test Item")
+    got = reservations.get_reservation("123")
+    assert got is not None
+    assert got.item_id == "123"
+    assert reservations.get_reservation("999") is None
+
+
+def test_register_order_sets_status_and_created_at(reservations: Reservations):
+    reservations.register_order("o1", "123", 1, "Test")
+    o = reservations.active_orders["o1"]
+    assert o.status == "RESERVED"
+    assert isinstance(o.created_at, int)
+
+
+def test_make_order_creates_order_with_status(reservations: Reservations, tgtg_item: dict):
+    callback_mock = MagicMock()
+    reservations.client.create_order.return_value = {"id": "ord_1"}  # type: ignore[attr-defined]
+    reservations.reserve("123", "Test Item")
+    reservations.make_orders({"123": Item(tgtg_item)}, callback_mock)
+    o = reservations.active_orders["ord_1"]
+    assert o.status == "RESERVED"
+    assert isinstance(o.created_at, int)
+
+
+def test_make_orders_respects_schedule(reservations: Reservations, tgtg_item: dict):
+    callback_mock = MagicMock()
+    schedule = Schedule.parse({"days": [0], "windows": ["00:00-00:01"]})
+    assert schedule is not None
+    schedule.is_now = lambda now=None: False  # type: ignore[method-assign]
+    reservations.reservation_query = [Reservation("123", 1, "Test", schedule=schedule)]
+    reservations.make_orders({"123": Item(tgtg_item)}, callback_mock)
+    reservations.client.create_order.assert_not_called()  # type: ignore[attr-defined]
+    callback_mock.assert_not_called()
+    assert len(reservations.reservation_query) == 1  # stays queued
