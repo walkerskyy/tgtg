@@ -102,6 +102,15 @@ def test_cancel_all_orders(reservations: Reservations):
     reservations.cancel_all_orders()
 
 
+def test_cancel_all_orders_skips_confirmed(reservations: Reservations):
+    reservations.active_orders["paid"] = Order("paid", "1", 1, "Paid", status="CONFIRMED", created_at=int(time.time()))
+    reservations.active_orders["unpaid"] = Order("unpaid", "2", 1, "Unpaid", status="RESERVED", created_at=int(time.time()))
+    reservations.cancel_all_orders()
+    reservations.client.abort_order.assert_called_once_with("unpaid")  # type: ignore[attr-defined]
+    assert "paid" in reservations.active_orders
+    assert "unpaid" not in reservations.active_orders
+
+
 def test_reservation_with_schedule_and_amount_roundtrip(tmp_path: Path):
     mock_client = MagicMock()
     r1 = Reservations(mock_client, str(tmp_path))

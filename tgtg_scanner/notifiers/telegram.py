@@ -33,7 +33,7 @@ from telegram.warnings import PTBUserWarning
 from tgtg_scanner.errors import MaskConfigurationError, TelegramConfigurationError
 from tgtg_scanner.models import Config, Favorites, Item, Reservations
 from tgtg_scanner.models.favorites import AddFavoriteRequest, RemoveFavoriteRequest
-from tgtg_scanner.models.reservations import Order, Reservation
+from tgtg_scanner.models.reservations import UNPAID_WARNING, Order, Reservation
 from tgtg_scanner.notifiers.base import Notifier
 
 log = logging.getLogger("tgtg")
@@ -209,6 +209,16 @@ class Telegram(Notifier):
             return bytes(getattr(item, matches[0].group(1)))
         return None
 
+    @staticmethod
+    def _reservation_text(item: Reservation) -> str:
+        if item.status == "CONFIRMED":
+            return f"{item.display_name} purchased - just pick it up"
+        if item.status == UNPAID_WARNING:
+            return f"{item.display_name} RESERVED BUT UNPAID - open the TGTG app now, hold expires soon"
+        if item.status and item.status != "reserved":
+            return f"{item.display_name} order status: {item.status}"
+        return f"{item.display_name} is reserved for 5 minutes"
+
     async def _send(self, item: Item | Reservation) -> None:  # type: ignore[override]
         """Send item information as Telegram message.
 
@@ -224,7 +234,7 @@ class Telegram(Notifier):
             if self.image:
                 image = self._unmask_image(self.image, item)
         elif isinstance(item, Reservation):
-            message = escape_markdown(f"{item.display_name} is reserved for 5 minutes", version=2)
+            message = escape_markdown(self._reservation_text(item), version=2)
         else:
             return
         await self._send_message(message, image)
@@ -306,7 +316,9 @@ class Telegram(Notifier):
     @_private
     async def _cancel_orders_menu(self, update: Update, _) -> None:
         buttons = [
-            [InlineKeyboardButton(order.display_name, callback_data=order)] for order in self.reservations.active_orders.values()
+            [InlineKeyboardButton(order.display_name, callback_data=order)]
+            for order in self.reservations.active_orders.values()
+            if order.status != "CONFIRMED"
         ]
         if len(buttons) == 0:
             await update.message.reply_text("No active Orders")

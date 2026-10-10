@@ -286,8 +286,10 @@ class Reservations:
             self._save()
 
     def cancel_all_orders(self) -> None:
-        """Cancel all active orders."""
-        for order_id in list(self.active_orders):
+        """Cancel all cancelable (unpaid) active orders."""
+        for order_id, order in list(self.active_orders.items()):
+            if order.status == "CONFIRMED":
+                continue
             self.cancel_order(order_id)
 
     def _create_order(self, reservation: Reservation) -> None:
