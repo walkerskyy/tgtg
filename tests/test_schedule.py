@@ -46,6 +46,8 @@ def test_is_now_window_gating():
     assert s.is_now(datetime(2026, 10, 5, 17, 0))
     assert not s.is_now(datetime(2026, 10, 5, 15, 59))
     assert not s.is_now(datetime(2026, 10, 5, 20, 1))
+    assert s.is_now(datetime(2026, 10, 5, 16, 0))
+    assert s.is_now(datetime(2026, 10, 5, 20, 0))
 
 
 def test_is_now_wrap_around_window():
@@ -58,3 +60,16 @@ def test_is_now_wrap_around_window():
 def test_is_now_no_restrictions():
     s = Schedule.parse({})
     assert s.is_now(datetime(2026, 10, 5, 3, 0))
+
+
+def test_is_now_combined_day_and_window():
+    s = Schedule.parse({"days": [0], "windows": ["16:00-20:00"]})
+    assert s.is_now(datetime(2026, 10, 5, 17, 0))  # Monday in window
+    assert not s.is_now(datetime(2026, 10, 6, 17, 0))  # Tuesday
+    assert not s.is_now(datetime(2026, 10, 5, 12, 0))  # Monday outside window
+
+
+def test_direct_constructor_normalizes_empty_days():
+    s = Schedule(days=[])
+    assert s.days is None
+    assert s.is_now(datetime(2026, 10, 5, 12, 0))

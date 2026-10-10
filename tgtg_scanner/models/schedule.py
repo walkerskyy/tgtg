@@ -20,6 +20,10 @@ class Schedule:
     days: list[int] | None = None
     windows: list[str] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        if self.days is not None and not self.days:
+            self.days = None
+
     @staticmethod
     def parse(data: object) -> Schedule | None:
         """Parse a schedule dict from reservations.json.
