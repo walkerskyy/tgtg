@@ -211,3 +211,32 @@ def test_make_orders_respects_schedule(reservations: Reservations, tgtg_item: di
     reservations.client.create_order.assert_not_called()  # type: ignore[attr-defined]
     callback_mock.assert_not_called()
     assert len(reservations.reservation_query) == 1  # stays queued
+
+
+def test_null_arrays_load_as_empty(tmp_path: Path):
+    mock_client = MagicMock()
+    (tmp_path / "reservations.json").write_text('{"reservation_query": null, "active_orders": null}')
+    r = Reservations(mock_client, str(tmp_path))
+    assert r.reservation_query == []
+    assert r.active_orders == {}
+    assert not list(tmp_path.glob("*.corrupt-*"))
+
+
+def test_unknown_extra_keys_ignored(tmp_path: Path):
+    mock_client = MagicMock()
+    (tmp_path / "reservations.json").write_text(
+        '{"reservation_query": [{"item_id": "1", "amount": 1, "display_name": "A", "future_field": 42, "status": "queued"}], '
+        '"active_orders": [{"id": "o1", "item_id": "1", "amount": 1, "display_name": "A", "extra": true}]}'
+    )
+    r = Reservations(mock_client, str(tmp_path))
+    assert r.reservation_query[0].item_id == "1"
+    assert r.reservation_query[0].status == "queued"
+    assert r.active_orders["o1"].status is None
+
+
+def test_save_leaves_no_tmp_file(tmp_path: Path):
+    mock_client = MagicMock()
+    r = Reservations(mock_client, str(tmp_path))
+    r.reserve("123", "Test Item")
+    assert not list(tmp_path.glob("*.tmp"))
+    assert (tmp_path / "reservations.json").is_file()

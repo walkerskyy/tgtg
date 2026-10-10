@@ -47,6 +47,7 @@ def _reservation_from_dict(data: dict) -> Reservation:
         amount=int(data.get("amount", 1)),
         display_name=data.get("display_name", ""),
         schedule=Schedule.parse(data.get("schedule")),
+        status=data.get("status"),
     )
 
 
@@ -81,9 +82,11 @@ class Reservations:
             if not isinstance(data, (list, dict)):
                 raise ValueError(f"expected list or object, got {type(data).__name__}")
             if isinstance(data, list):
-                entries, orders = data, []
+                entries: list = data
+                orders: list = []
             else:
-                entries, orders = data.get("reservation_query", []), data.get("active_orders", [])
+                entries = data.get("reservation_query") or []
+                orders = data.get("active_orders") or []
             self.reservation_query = [_reservation_from_dict(r) for r in entries]
             self.active_orders = {o["id"]: _order_from_dict(o) for o in orders}
             log.info(
@@ -112,7 +115,8 @@ class Reservations:
             return
         try:
             self._persist_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._persist_path.open("w", encoding="utf-8") as f:
+            tmp_path = self._persist_path.with_name(f"{self._persist_path.name}.tmp")
+            with tmp_path.open("w", encoding="utf-8") as f:
                 json.dump(
                     {
                         "reservation_query": [asdict(r) for r in self.reservation_query],
@@ -121,6 +125,7 @@ class Reservations:
                     f,
                     indent=2,
                 )
+            tmp_path.replace(self._persist_path)
         except OSError as err:
             log.error("Failed to save reservations: %s", err)
 
