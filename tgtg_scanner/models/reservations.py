@@ -206,16 +206,75 @@ class Reservations:
                 except Exception as exc:
                     log.warning("Order failed for %s: %s", reservation.display_name, exc)
 
-    def update_active_orders(self) -> None:
-        """Remove orders that are not active anymore."""
+    def process_active_orders(self) -> list[Order]:
+        """Check every tracked order's status and report transitions.
+
+        - CONFIRMED (paid): notify once, keep in ledger; prune when it leaves get_active().
+        - RESERVED past PAYMENT_DEADLINE: set UNPAID_WARNING and notify once.
+        - Any other state (CANCELED/EXPIRED/...): notify and remove.
+
+        Returns:
+            list[Order]: orders that got an event this call (send these to notifiers).
+        """
         changed = False
-        for order_id in list(self.active_orders):
-            res = self.client.get_order_status(order_id)
-            if res.get("state") != "RESERVED":
+        events: list[Order] = []
+        now = int(time.time())
+        for order_id, order in list(self.active_orders.items()):
+            try:
+                res = self.client.get_order_status(order_id)
+            except Exception as exc:
+                log.warning("Failed to get status for order %s: %s", order_id, exc)
+                continue
+            state = res.get("state", "") if isinstance(res, dict) else ""
+            if not isinstance(state, str) or not state:
+                continue
+            if state == "CONFIRMED":
+                if order.status != "CONFIRMED":
+                    order.status = "CONFIRMED"
+                    changed = True
+                    events.append(order)
+                    log.info("Order %s CONFIRMED (purchased) for %s", order_id, order.display_name)
+            elif state == "RESERVED":
+                if order.status == "RESERVED" and order.created_at and now - order.created_at >= PAYMENT_DEADLINE:
+                    order.status = UNPAID_WARNING
+                    changed = True
+                    events.append(order)
+                    log.warning("Order %s still unpaid for %s - sending warning", order_id, order.display_name)
+            else:
+                log.info("Order %s entered terminal state %s for %s", order_id, state, order.display_name)
+                order.status = state
+                events.append(order)
                 del self.active_orders[order_id]
+                changed = True
+        if any(o.status == "CONFIRMED" for o in self.active_orders.values()):
+            if self._prune_collected_orders():
                 changed = True
         if changed:
             self._save()
+        return events
+
+    def _prune_collected_orders(self) -> bool:
+        """Drop CONFIRMED orders that no longer appear in get_active(). Returns True when changed."""
+        try:
+            active = self.client.get_active()
+        except Exception as exc:
+            log.warning("Failed to list active orders: %s", exc)
+            return False
+        if not isinstance(active, dict):
+            log.warning("Unexpected get_active() response (%s) - skipping prune", type(active).__name__)
+            return False
+        orders = active.get("orders", [])
+        if not isinstance(orders, list):
+            log.warning("Unexpected get_active() orders shape (%s) - skipping prune", type(orders).__name__)
+            return False
+        active_ids = {o.get("id") for o in orders if isinstance(o, dict)}
+        pruned = False
+        for order_id in [oid for oid, o in self.active_orders.items() if o.status == "CONFIRMED"]:
+            if order_id not in active_ids:
+                log.info("Confirmed order %s no longer active - removing from ledger", order_id)
+                del self.active_orders[order_id]
+                pruned = True
+        return pruned
 
     def cancel_order(self, order_id: str) -> None:
         """Cancel an order."""

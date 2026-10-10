@@ -1,10 +1,11 @@
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from tgtg_scanner.models.item import Item
-from tgtg_scanner.models.reservations import Order, Reservation, Reservations
+from tgtg_scanner.models.reservations import UNPAID_WARNING, Order, Reservation, Reservations
 from tgtg_scanner.models.schedule import Schedule
 
 
@@ -76,17 +77,6 @@ def test_no_persistence_when_no_dir(reservations: Reservations):
     """When persist_dir is None, no file is written."""
     reservations.reserve("123", "Test Item")
     assert reservations._persist_path is None
-
-
-def test_update_active_orders(reservations: Reservations):
-    order = Order("1", "123", 1, "Test Item")
-    reservations.client.get_order_status.return_value = {"state": "RESERVED"}  # type: ignore[attr-defined]
-    reservations.active_orders = {order.id: order}
-    reservations.update_active_orders()
-    assert len(reservations.active_orders) == 1
-    reservations.client.get_order_status.return_value = {"state": "CANELLED"}  # type: ignore[attr-defined]
-    reservations.update_active_orders()
-    assert len(reservations.active_orders) == 0
 
 
 def test_cancel_order(reservations: Reservations):
@@ -240,3 +230,64 @@ def test_save_leaves_no_tmp_file(tmp_path: Path):
     r.reserve("123", "Test Item")
     assert not list(tmp_path.glob("*.tmp"))
     assert (tmp_path / "reservations.json").is_file()
+
+
+def test_process_confirmed_order_notifies_and_keeps(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="RESERVED", created_at=int(time.time()))
+    reservations.client.get_order_status.return_value = {"state": "CONFIRMED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert [o.id for o in notified] == ["o1"]
+    assert notified[0].status == "CONFIRMED"
+    assert "o1" in reservations.active_orders  # kept in ledger
+
+
+def test_process_reserved_order_no_notification_before_deadline(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="RESERVED", created_at=int(time.time()))
+    reservations.client.get_order_status.return_value = {"state": "RESERVED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert notified == []
+    assert reservations.active_orders["o1"].status == "RESERVED"
+
+
+def test_process_unpaid_warning_fires_once_past_deadline(reservations: Reservations):
+    old = int(time.time()) - 300
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="RESERVED", created_at=old)
+    reservations.client.get_order_status.return_value = {"state": "RESERVED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert len(notified) == 1
+    assert notified[0].status == UNPAID_WARNING
+    assert reservations.active_orders["o1"].status == UNPAID_WARNING
+    # second call: no repeat warning
+    notified2 = reservations.process_active_orders()
+    assert notified2 == []
+
+
+def test_process_terminal_state_removes_and_notifies(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="RESERVED", created_at=int(time.time()))
+    reservations.client.get_order_status.return_value = {"state": "CANCELED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert len(notified) == 1
+    assert notified[0].status == "CANCELED"
+    assert "o1" not in reservations.active_orders
+
+
+def test_process_status_error_skips_order(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="RESERVED", created_at=int(time.time()))
+    reservations.client.get_order_status.side_effect = RuntimeError("boom")  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert notified == []
+    assert "o1" in reservations.active_orders
+
+
+def test_confirmed_order_pruned_when_leaves_active(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="CONFIRMED", created_at=int(time.time()))
+    reservations.client.get_active.return_value = {"orders": []}  # type: ignore[attr-defined]
+    reservations.process_active_orders()
+    assert "o1" not in reservations.active_orders
+
+
+def test_confirmed_order_kept_while_still_active(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="CONFIRMED", created_at=int(time.time()))
+    reservations.client.get_active.return_value = {"orders": [{"id": "o1"}]}  # type: ignore[attr-defined]
+    reservations.process_active_orders()
+    assert "o1" in reservations.active_orders
