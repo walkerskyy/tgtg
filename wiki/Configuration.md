@@ -84,6 +84,20 @@ You can combine multiple crons as semicolon separated list.
 |                 | UID              | set user id for docker container                                                  | `1000`      |
 |                 | GID              | set group id for docker container                                                 | `1000`      |
 
+### [RESERVATION] / Smart-reserve settings
+
+| config.ini | environment           | description                                                                     | default |
+| ---------- | --------------------- | ------------------------------------------------------------------------------- | ------- |
+| FastPoll   | RESERVATION_FAST_POLL | enable learned ~10s polling in predicted drop windows and while an order is unpaid | `true`  |
+
+Queued reservations and their lifecycle orders are persisted in `reservations.json`
+(next to `config.ini`, or in `TGTG_TOKEN_PATH` if set). Entries in the `reservation_query`
+array accept two optional fields:
+
+- `amount`: number of bags to auto-buy (default `1`)
+- `schedule`: `{"days": [0-6 Monday-based], "windows": ["HH:MM-HH:MM"]}` — only auto-buy
+  inside this schedule; omit for always eligible
+
 ### [TGTG] / TGTG account
 
 | config.ini          | environment                | description                             | default | required |
