@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from random import random
 from time import sleep
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from progress.spinner import Spinner
 
@@ -74,7 +74,7 @@ class Scanner:
     @staticmethod
     def _build_client(config: Config) -> TgtgClient:
         tgtg = config.tgtg
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "url": tgtg.base_url or BASE_URL,
             "email": tgtg.username,
             "access_token": tgtg.access_token,

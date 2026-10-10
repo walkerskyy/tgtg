@@ -3,6 +3,7 @@
 import json
 import pathlib
 from os import getenv
+from typing import Any
 from urllib.parse import urljoin
 
 import pytest
@@ -120,7 +121,7 @@ def test_get_favorites_loads_all_pages(tgtg_item: dict):
 def test_tgtg_api(item_properties: dict):
     config = Config("config.ini") if pathlib.Path("config.ini").is_file() else Config()
     env_file = getenv("GITHUB_ENV")
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "email": config.tgtg.username,
         "timeout": config.tgtg.timeout,
         "access_token_lifetime": config.tgtg.access_token_lifetime,
