@@ -108,3 +108,22 @@ def test_env_get(monkeypatch: pytest.MonkeyPatch):
     assert config.webhook.headers == {"Accept": "json"}
     assert config.webhook.cron == Cron("* * 1-5 * *")
     assert config.webhook.body == '{"content": "${{items_available}} panier(s) à ${{price}} € \nÀ récupérer 🍔"}'
+
+
+def test_fast_poll_default():
+    config = Config(disable_tests=True)
+    assert config.reservation.fast_poll is True
+
+
+def test_fast_poll_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("RESERVATION_FAST_POLL", "false")
+    config = Config(disable_tests=True)
+    assert config.reservation.fast_poll is False
+
+
+def test_fast_poll_ini(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("RESERVATION_FAST_POLL", raising=False)
+    ini = tmp_path / "config.ini"
+    ini.write_text("[RESERVATION]\nFastPoll = false\n")
+    config = Config(str(ini), disable_tests=True)
+    assert config.reservation.fast_poll is False

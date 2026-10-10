@@ -199,6 +199,19 @@ class TelegramConfig(NotifierConfig):
 
 
 @dataclass
+class ReservationConfig(BaseConfig):
+    """Reservation / smart-reserve settings."""
+
+    fast_poll: bool = True
+
+    def _read_ini(self, parser: configparser.ConfigParser):
+        self._ini_get_boolean(parser, "RESERVATION", "FastPoll", "fast_poll")
+
+    def _read_env(self):
+        self._env_get_boolean("RESERVATION_FAST_POLL", "fast_poll")
+
+
+@dataclass
 class PushSaferConfig(NotifierConfig):
     """PushSafer Notifier configuration."""
 
@@ -561,6 +574,7 @@ class Config(BaseConfig):
     script: ScriptConfig = field(default_factory=ScriptConfig)
     discord: DiscordConfig = field(default_factory=DiscordConfig)
     price_monitoring: bool = False
+    reservation: ReservationConfig = field(default_factory=ReservationConfig)
 
     def __post_init__(self):
         if self.file:
@@ -575,6 +589,7 @@ class Config(BaseConfig):
             self.location._read_ini(parser)
             self.apprise._read_ini(parser)
             self.telegram._read_ini(parser)
+            self.reservation._read_ini(parser)
             self.pushsafer._read_ini(parser)
             self.console._read_ini(parser)
             self.smtp._read_ini(parser)
@@ -591,6 +606,7 @@ class Config(BaseConfig):
             self.location._read_env()
             self.apprise._read_env()
             self.telegram._read_env()
+            self.reservation._read_env()
             self.pushsafer._read_env()
             self.console._read_env()
             self.smtp._read_env()
