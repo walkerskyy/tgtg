@@ -1,4 +1,4 @@
-# BagRescue-Parity: Purchase Confirmation, Per-Item Schedules, Learned Fast Polling
+# Smart Reserve: Purchase Confirmation, Per-Item Schedules, Learned Fast Polling
 
 **Date**: 2026-10-10
 **Status**: Approved design
