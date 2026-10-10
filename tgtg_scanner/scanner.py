@@ -1,5 +1,6 @@
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 from random import random
 from time import sleep
@@ -18,7 +19,7 @@ from tgtg_scanner.models import (
     Reservations,
 )
 from tgtg_scanner.models.drop_history import DropHistory
-from tgtg_scanner.models.reservations import Order, is_sold_out_error
+from tgtg_scanner.models.reservations import UNPAID_WARNING, Order, is_sold_out_error
 from tgtg_scanner.models.reservations import Reservation as ReservationObj
 from tgtg_scanner.models.stock_monitor import StockMonitor
 from tgtg_scanner.notifiers import Notifiers
@@ -67,6 +68,7 @@ class Scanner:
             reservations_dir = self.config.token_path
         self.reservations = Reservations(self.tgtg_client, reservations_dir)
         self.drop_history = DropHistory(reservations_dir)
+        self._rr_index = 0
         self.favorites = Favorites(self.tgtg_client)
 
     @staticmethod
@@ -192,6 +194,44 @@ class Scanner:
         except Exception as exc:
             log.warning("Failed to process order events: %s", exc)
 
+    def _fast_mode_active(self) -> bool:
+        """True when a queued item is in a predicted drop window or an unpaid order is pending."""
+        now = datetime.now()
+        for reservation in self.reservations.reservation_query:
+            if self.drop_history.in_predicted_window(reservation.item_id, now):
+                return True
+        for order in self.reservations.active_orders.values():
+            if order.status in ("RESERVED", UNPAID_WARNING):
+                return True
+        return False
+
+    def _next_sleep_time(self) -> float:
+        if self.config.reservation.fast_poll and self._fast_mode_active():
+            return 8.0 + 4.0 * random()
+        return self.config.sleep_time * (0.9 + 0.2 * random())
+
+    def _fast_job(self) -> None:
+        """Reduced cycle while fast mode is active."""
+        if self.notifiers is None:
+            raise RuntimeError("Notifiers not initialized!")
+        try:
+            items = [self._item_from_api(data) for data in self.tgtg_client.get_favorites()]
+        except TgtgAPIError as err:
+            log.error(err)
+            items = []
+        favorite_ids = {item.item_id for item in items}
+        non_favorites = sorted(r.item_id for r in self.reservations.reservation_query if r.item_id not in favorite_ids)
+        if non_favorites:
+            item_id = non_favorites[self._rr_index % len(non_favorites)]
+            self._rr_index += 1
+            try:
+                items.append(self._item_from_api(self.tgtg_client.get_item(item_id)))
+            except TgtgAPIError as err:
+                log.error(err)
+        self._process_items(items)
+        self._process_order_events()
+        self._save_tokens()
+
     def _notify_order_event(self, order: Order) -> None:
         if self.notifiers:
             self.notifiers.send(ReservationObj(order.item_id, order.amount, order.display_name, status=order.status))
@@ -279,11 +319,14 @@ class Scanner:
                     log.info("Scanner reenabled by cron schedule.")
                     running = True
                 try:
-                    self._job()
+                    if self.config.reservation.fast_poll and self._fast_mode_active():
+                        self._fast_job()
+                    else:
+                        self._job()
                 except Exception:
                     log.error("Job Error! - %s", sys.exc_info())
                 finally:
-                    sleep_time = self.config.sleep_time * (0.9 + 0.2 * random())
+                    sleep_time = self._next_sleep_time()
                     steps = max(int(sleep_time), 1)
                     for _ in range(steps):
                         activity.next()

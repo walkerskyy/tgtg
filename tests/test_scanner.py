@@ -213,3 +213,64 @@ def test_job_calls_process_order_events(scanner: Scanner, mocker: MockerFixture)
     scanner._job()
 
     mock_events.assert_called_once()
+
+
+def test_fast_mode_when_predicted_window(scanner: Scanner, mocker: MockerFixture):
+    scanner.reservations.reserve("123", "Test")
+    mocker.patch.object(scanner.drop_history, "in_predicted_window", return_value=True)
+    assert scanner._fast_mode_active()
+
+
+def test_fast_mode_when_unpaid_order_pending(scanner: Scanner, mocker: MockerFixture):
+    from tgtg_scanner.models.reservations import Order
+
+    mocker.patch.object(scanner.drop_history, "in_predicted_window", return_value=False)
+    scanner.reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="RESERVED", created_at=1)
+    assert scanner._fast_mode_active()
+
+
+def test_fast_mode_off_without_queue_or_orders(scanner: Scanner, mocker: MockerFixture):
+    mocker.patch.object(scanner.drop_history, "in_predicted_window", return_value=False)
+    assert not scanner._fast_mode_active()
+
+
+def test_fast_mode_disabled_by_config(scanner: Scanner, mocker: MockerFixture):
+    scanner.config.reservation.fast_poll = False
+    scanner.reservations.reserve("123", "Test")
+    mocker.patch.object(scanner.drop_history, "in_predicted_window", return_value=True)
+    # _fast_mode_active still reports True (it's the signal); the gate is in run()/_next_sleep_time
+    assert scanner._fast_mode_active()
+    assert scanner._next_sleep_time() >= scanner.config.sleep_time * 0.9
+
+
+def test_next_sleep_time_fast_range(scanner: Scanner, mocker: MockerFixture):
+    mocker.patch.object(scanner, "_fast_mode_active", return_value=True)
+    for _ in range(20):
+        assert 8.0 <= scanner._next_sleep_time() <= 12.0
+
+
+def test_next_sleep_time_normal_range(scanner: Scanner, mocker: MockerFixture):
+    mocker.patch.object(scanner, "_fast_mode_active", return_value=False)
+    for _ in range(20):
+        assert scanner.config.sleep_time * 0.9 <= scanner._next_sleep_time() <= scanner.config.sleep_time * 1.1
+
+
+def test_fast_job_favorites_and_one_non_favorite(scanner: Scanner, tgtg_item: dict, mocker: MockerFixture):
+    fav = dict(tgtg_item, item=dict(tgtg_item["item"], item_id="fav1"))
+    scanner.reservations.reserve("nf1", "NF One")
+    scanner.reservations.reserve("nf2", "NF Two")
+    scanner.reservations.reserve("fav1", "Fav")
+    mocker.patch.object(scanner.tgtg_client, "get_favorites", return_value=[fav])
+    mock_get_item = mocker.patch.object(scanner.tgtg_client, "get_item", return_value=tgtg_item)
+    mocker.patch.object(scanner, "_process_items")
+    mocker.patch.object(scanner, "_process_order_events")
+    mocker.patch.object(scanner, "_save_tokens")
+    scanner.notifiers = mocker.MagicMock()
+
+    scanner._fast_job()
+    first = mock_get_item.call_args[0][0]
+    scanner._fast_job()
+    second = mock_get_item.call_args[0][0]
+
+    assert {first, second} == {"nf1", "nf2"}
+    assert mock_get_item.call_count == 2
