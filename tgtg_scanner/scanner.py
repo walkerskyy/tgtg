@@ -154,7 +154,7 @@ class Scanner:
 
         amounts = {item_id: item.items_available for item_id, item in self.monitor.state.items()}
         log.debug("new State: %s", amounts)
-        self.reservations.make_orders(self.monitor.state, self.notifiers.send)
+        self.reservations.make_orders(self.monitor.state, self.notifiers.send, on_sold_out=self.drop_history.record)
 
         if not self.monitor.state:
             log.warning("No items in observation! Did you add any favorites?")
@@ -166,25 +166,31 @@ class Scanner:
     def _process_items(self, items: list[Item]) -> None:
         """Observe items, attempt reservations on transitions, send notifications."""
         for item in items:
-            prev = self.monitor.state.get(item.item_id)
-            if self.monitor.observe(item):
-                if (
-                    prev is not None
-                    and prev.items_available == 0
-                    and item.items_available > 0
-                    and self.reservations.is_queued(item.item_id)
-                ):
-                    self.drop_history.record(item.item_id)
-                self._attempt_reservation(item)
-                if item.reservation_status == "reserved":
-                    self.reservations.remove(item.item_id)
-                    if self.notifiers:
-                        self.notifiers.send(
-                            ReservationObj(item.item_id, item.reservation_amount or 1, item.display_name, status="reserved")
-                        )
-                self._send_messages(item)
-                self.metrics.send_notifications.labels(item.item_id, item.display_name).inc()
-            self.metrics.update(item)
+            try:
+                self._process_item(item)
+            except Exception as exc:
+                log.warning("Failed to process item %s: %s", item.display_name, exc)
+
+    def _process_item(self, item: Item) -> None:
+        prev = self.monitor.state.get(item.item_id)
+        if self.monitor.observe(item):
+            if (
+                prev is not None
+                and prev.items_available == 0
+                and item.items_available > 0
+                and self.reservations.is_queued(item.item_id)
+            ):
+                self.drop_history.record(item.item_id)
+            self._attempt_reservation(item)
+            if item.reservation_status == "reserved":
+                self.reservations.remove(item.item_id)
+                if self.notifiers:
+                    self.notifiers.send(
+                        ReservationObj(item.item_id, item.reservation_amount or 1, item.display_name, status="reserved")
+                    )
+            self._send_messages(item)
+            self.metrics.send_notifications.labels(item.item_id, item.display_name).inc()
+        self.metrics.update(item)
 
     def _process_order_events(self) -> None:
         """Poll tracked orders and notify on purchase/unpaid/terminal events."""
@@ -225,6 +231,7 @@ class Scanner:
             except TgtgAPIError as err:
                 log.error(err)
         self._process_items(items)
+        self.reservations.make_orders(self.monitor.state, self.notifiers.send, on_sold_out=self.drop_history.record)
         self._process_order_events()
         self._save_tokens()
 
@@ -315,7 +322,12 @@ class Scanner:
                     log.info("Scanner reenabled by cron schedule.")
                     running = True
                 try:
-                    if self.config.reservation.fast_poll and self._fast_mode_active():
+                    try:
+                        fast = self.config.reservation.fast_poll and self._fast_mode_active()
+                    except Exception:
+                        log.warning("Failed to evaluate fast mode - using normal cycle")
+                        fast = False
+                    if fast:
                         self._fast_job()
                     else:
                         self._job()

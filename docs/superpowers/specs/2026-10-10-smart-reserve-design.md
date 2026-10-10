@@ -183,15 +183,18 @@ effective_sleep = uniform(8, 12) seconds   # fast_mode
 1. One `get_favorites()` call → observe + attempt reservation for queued favorites.
 2. `get_item()` for queued non-favorites **round-robin, one per cycle** — request rate stays
    ~1 per 10s regardless of queue size.
-3. Check status of all `RESERVED` orders (see §4).
+3. `make_orders()` fallback (buys queued items that are already available — in-memory,
+   zero API cost unless an order is eligible; sold-out races are recorded for learning).
+4. Check status of all `RESERVED` orders (see §4).
 
 **Normal cycle**: unchanged `_job()` (favorites + configured item_ids + `make_orders()`
 fallback), plus the order-status check.
 
 The existing global cron gate stays a hard outer gate — no polling (fast or slow) outside
-scheduled hours. A global minimum spacing (~8s) between TGTG requests caps request heat;
-the existing DataDome captcha fallback in `TgtgClient._post()` applies to every request
-unchanged.
+scheduled hours. Fast cycles are spaced ~8–12s apart (dynamic sleep) and normal cycles
+~SleepTime ±10%, capping request heat at the cycle level; within a cycle, requests are
+issued back-to-back. The existing DataDome captcha fallback in `TgtgClient._post()` applies
+to every request unchanged.
 
 ### 4. Purchase lifecycle
 
@@ -212,9 +215,11 @@ unchanged.
    - `UNPAID_WARNING` orders keep being polled: if payment lands late (`CONFIRMED`), the
      purchased notification is still sent; if the order goes terminal, the terminal
      handling below applies.
-   - Terminal states (`CANCELED`, `EXPIRED`, `REFUNDED`, …) → notification carrying that
-     status; order removed from `active_orders`.
-3. **Bug fix**: `Reservations.update_active_orders()` no longer drops every non-`RESERVED`
+   - Terminal states (`CANCELED`, `EXPIRED`, `REFUNDED`) → notification carrying that
+     status; order removed from `active_orders`. Any other unknown state is logged at
+     warning level and kept in the ledger (payment watch continues; never silently drop).
+3. **Bug fix**: `Reservations.update_active_orders()` (replaced by
+   `process_active_orders()`) no longer drops every non-`RESERVED`
    order (which silently discarded paid orders). It becomes the status-tracking method
    described above. Orders in `CONFIRMED` that later leave `get_active()` are dropped with
    a log line (no unbounded ledger growth).

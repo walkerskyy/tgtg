@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tgtg_scanner.errors import TgtgAPIError
 from tgtg_scanner.models.item import Item
 from tgtg_scanner.models.reservations import UNPAID_WARNING, Order, Reservation, Reservations
 from tgtg_scanner.models.schedule import Schedule
@@ -114,7 +115,7 @@ def test_cancel_all_orders_skips_confirmed(reservations: Reservations):
 
 def test_cancel_order_refuses_confirmed(reservations: Reservations):
     reservations.active_orders["paid"] = Order("paid", "1", 1, "Paid", status="CONFIRMED", created_at=int(time.time()))
-    reservations.cancel_order("paid")
+    assert reservations.cancel_order("paid") is False
     reservations.client.abort_order.assert_not_called()  # type: ignore[attr-defined]
     assert "paid" in reservations.active_orders
 
@@ -332,3 +333,31 @@ def test_confirmed_order_then_terminal_removes(reservations: Reservations):
     notified = reservations.process_active_orders()
     assert [o.status for o in notified] == ["REFUNDED"]
     assert "o1" not in reservations.active_orders
+
+
+def test_unknown_state_kept_in_ledger(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="RESERVED", created_at=int(time.time()))
+    reservations.client.get_order_status.return_value = {"state": "SOME_FUTURE_STATE"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert notified == []
+    assert "o1" in reservations.active_orders
+    assert reservations.active_orders["o1"].status == "RESERVED"
+
+
+def test_make_orders_sold_out_calls_callback(reservations: Reservations, tgtg_item: dict):
+    callback_mock = MagicMock()
+    sold_out_mock = MagicMock()
+    reservations.client.create_order.side_effect = TgtgAPIError(400, b"Item is sold out")  # type: ignore[attr-defined]
+    reservations.reserve("123", "Test Item")
+    reservations.make_orders({"123": Item(tgtg_item)}, callback_mock, on_sold_out=sold_out_mock)
+    sold_out_mock.assert_called_once_with("123")
+    callback_mock.assert_not_called()
+    assert len(reservations.reservation_query) == 1  # stays queued for retry
+
+
+def test_make_orders_non_sold_out_error_no_callback(reservations: Reservations, tgtg_item: dict):
+    sold_out_mock = MagicMock()
+    reservations.client.create_order.side_effect = TgtgAPIError(403, b"captcha challenge")  # type: ignore[attr-defined]
+    reservations.reserve("123", "Test Item")
+    reservations.make_orders({"123": Item(tgtg_item)}, MagicMock(), on_sold_out=sold_out_mock)
+    sold_out_mock.assert_not_called()

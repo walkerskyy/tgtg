@@ -14,6 +14,7 @@ log = logging.getLogger("tgtg")
 UNPAID_WARNING = "UNPAID_WARNING"
 PAYMENT_DEADLINE = 270  # seconds; TGTG reservation hold is ~5 minutes
 SOLD_OUT_MARKERS = ("sold out", "no longer available", "not available", "out of stock")
+TERMINAL_STATES = frozenset({"CANCELED", "EXPIRED", "REFUNDED"})
 
 
 def is_sold_out_error(err: Exception) -> bool:
@@ -179,8 +180,13 @@ class Reservations:
                 return r
         return None
 
-    def make_orders(self, state: dict[str, Item], callback: Callable[[Reservation], None]) -> None:
-        """Create orders for reservations.
+    def make_orders(
+        self,
+        state: dict[str, Item],
+        callback: Callable[[Reservation], None],
+        on_sold_out: Callable[[str], None] | None = None,
+    ) -> None:
+        """Create orders for all eligible reservations.
 
         Items already handled by _attempt_reservation this cycle
         (identified by reservation_status on the state item) are skipped.
@@ -188,6 +194,7 @@ class Reservations:
         Args:
             state (Dict[str, Item]): Current item state
             callback (Callable[[Reservation], None]): Callback for each order
+            on_sold_out: called with item_id when order creation fails with a sold-out-class error
 
         """
         for reservation in list(self.reservation_query):
@@ -206,13 +213,16 @@ class Reservations:
                     log.info("Reservation completed for %s and removed from queue", reservation.display_name)
                 except Exception as exc:
                     log.warning("Order failed for %s: %s", reservation.display_name, exc)
+                    if on_sold_out is not None and is_sold_out_error(exc):
+                        on_sold_out(reservation.item_id)
 
     def process_active_orders(self) -> list[Order]:
         """Check every tracked order's status and report transitions.
 
         - CONFIRMED (paid): notify once, keep in ledger; prune when it leaves get_active().
         - RESERVED past PAYMENT_DEADLINE: set UNPAID_WARNING and notify once.
-        - Any other state (CANCELED/EXPIRED/...): notify and remove.
+        - Terminal state (CANCELED/EXPIRED/REFUNDED): notify and remove.
+        - Unknown non-empty state: log a warning, keep polling (never silently drop).
 
         Returns:
             list[Order]: orders that got an event this call (send these to notifiers).
@@ -243,11 +253,14 @@ class Reservations:
                     events.append(order)
                     log.warning("Order %s still unpaid for %s - sending warning", order_id, order.display_name)
             else:
-                log.info("Order %s entered terminal state %s for %s", order_id, state, order.display_name)
-                order.status = state
-                events.append(order)
-                self.active_orders.pop(order_id, None)
-                changed = True
+                if state in TERMINAL_STATES:
+                    log.info("Order %s entered terminal state %s for %s", order_id, state, order.display_name)
+                    order.status = state
+                    events.append(order)
+                    self.active_orders.pop(order_id, None)
+                    changed = True
+                else:
+                    log.warning("Order %s has unknown state %r for %s - keeping in ledger", order_id, state, order.display_name)
         if any(o.status == "CONFIRMED" for o in self.active_orders.values()):
             if self._prune_collected_orders():
                 changed = True
@@ -269,7 +282,7 @@ class Reservations:
         if not isinstance(orders, list):
             log.warning("Unexpected get_active() orders shape (%s) - skipping prune", type(orders).__name__)
             return False
-        active_ids = {o.get("id") for o in orders if isinstance(o, dict)}
+        active_ids = {o["id"] for o in orders if isinstance(o, dict) and isinstance(o.get("id"), str)}
         pruned = False
         for order_id in [oid for oid, o in self.active_orders.items() if o.status == "CONFIRMED"]:
             if order_id not in active_ids:
@@ -278,16 +291,20 @@ class Reservations:
                 pruned = True
         return pruned
 
-    def cancel_order(self, order_id: str) -> None:
-        """Cancel an unpaid active order. CONFIRMED (paid) orders cannot be aborted."""
+    def cancel_order(self, order_id: str) -> bool:
+        """Cancel an unpaid active order. CONFIRMED (paid) orders cannot be aborted.
+
+        Returns True when the order was cancelled, False when refused.
+        """
         order = self.active_orders.get(order_id)
         if order is not None and order.status == "CONFIRMED":
             log.warning("Refusing to cancel confirmed (paid) order %s", order_id)
-            return
+            return False
         self.client.abort_order(order_id)
         if order_id in self.active_orders:
             del self.active_orders[order_id]
             self._save()
+        return True
 
     def cancel_all_orders(self) -> tuple[int, int]:
         """Cancel all unpaid active orders. Returns (cancelled, skipped_paid)."""

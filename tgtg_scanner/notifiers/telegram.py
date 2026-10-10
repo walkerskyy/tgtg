@@ -458,9 +458,12 @@ class Telegram(Notifier):
             await update.callback_query.answer(f"Removed {data.display_name} from reservation queue")
             log.debug('Removed "%s" from reservation queue', data.display_name)
         if isinstance(data, Order):
-            self.reservations.cancel_order(data.id)
-            await update.callback_query.answer(f"Canceled Order for {data.display_name}")
-            log.debug('Canceled order for "%s"', data.display_name)
+            if self.reservations.cancel_order(data.id):
+                await update.callback_query.answer(f"Canceled Order for {data.display_name}")
+                log.debug('Canceled order for "%s"', data.display_name)
+            else:
+                await update.callback_query.answer(f"Could not cancel Order for {data.display_name} (already paid)")
+                log.debug('Refused to cancel paid order for "%s"', data.display_name)
         if isinstance(data, AddFavoriteRequest):
             if data.proceed:
                 self.favorites.add_favorites([data.item_id])
