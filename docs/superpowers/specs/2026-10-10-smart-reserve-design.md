@@ -173,7 +173,7 @@ After each cycle the loop computes:
 
 ```
 fast_mode = any queued item matches a predicted window
-            OR any active order is still RESERVED (payment watch)
+            OR any active order is still RESERVED or UNPAID_WARNING (payment watch)
 effective_sleep = uniform(8, 12) seconds   # fast_mode
                 = config.sleep_time ± 10%  # otherwise
 ```

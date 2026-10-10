@@ -214,11 +214,7 @@ class Scanner:
         """Reduced cycle while fast mode is active."""
         if self.notifiers is None:
             raise RuntimeError("Notifiers not initialized!")
-        try:
-            items = [self._item_from_api(data) for data in self.tgtg_client.get_favorites()]
-        except TgtgAPIError as err:
-            log.error(err)
-            items = []
+        items = self._load_favorite_items()
         favorite_ids = {item.item_id for item in items}
         non_favorites = sorted(r.item_id for r in self.reservations.reservation_query if r.item_id not in favorite_ids)
         if non_favorites:
@@ -326,7 +322,11 @@ class Scanner:
                 except Exception:
                     log.error("Job Error! - %s", sys.exc_info())
                 finally:
-                    sleep_time = self._next_sleep_time()
+                    try:
+                        sleep_time = self._next_sleep_time()
+                    except Exception:
+                        log.warning("Failed to compute next sleep time - using default")
+                        sleep_time = self.config.sleep_time * (0.9 + 0.2 * random())
                     steps = max(int(sleep_time), 1)
                     for _ in range(steps):
                         activity.next()

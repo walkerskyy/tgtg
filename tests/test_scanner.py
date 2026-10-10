@@ -263,7 +263,7 @@ def test_fast_job_favorites_and_one_non_favorite(scanner: Scanner, tgtg_item: di
     mocker.patch.object(scanner.tgtg_client, "get_favorites", return_value=[fav])
     mock_get_item = mocker.patch.object(scanner.tgtg_client, "get_item", return_value=tgtg_item)
     mocker.patch.object(scanner, "_process_items")
-    mocker.patch.object(scanner, "_process_order_events")
+    mock_order_events = mocker.patch.object(scanner, "_process_order_events")
     mocker.patch.object(scanner, "_save_tokens")
     scanner.notifiers = mocker.MagicMock()
 
@@ -274,3 +274,4 @@ def test_fast_job_favorites_and_one_non_favorite(scanner: Scanner, tgtg_item: di
 
     assert {first, second} == {"nf1", "nf2"}
     assert mock_get_item.call_count == 2
+    assert mock_order_events.call_count == 2  # spec §4: order events every cycle, fast or normal

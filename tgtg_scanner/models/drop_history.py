@@ -90,7 +90,11 @@ class DropHistory:
         weekday = now.weekday()
         counts: dict[tuple[int, int], int] = {}
         for ts in events:
-            dt = datetime.fromtimestamp(ts)
+            try:
+                dt = datetime.fromtimestamp(ts)
+            except (OSError, OverflowError, ValueError):
+                log.warning("Skipping out-of-range drop event timestamp %r for %s", ts, item_id)
+                continue
             key = (dt.weekday(), (dt.hour * 60 + dt.minute) // SLOT_MINUTES)
             counts[key] = counts.get(key, 0) + 1
         for s in (slot, (slot - 1) % SLOTS_PER_DAY, (slot + 1) % SLOTS_PER_DAY):

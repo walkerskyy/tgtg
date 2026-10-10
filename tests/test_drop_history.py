@@ -119,3 +119,11 @@ def test_dedupe_independent_per_item(tmp_path: Path):
     data = json.loads((tmp_path / DROP_HISTORY_FILE).read_text())
     assert data["a"] == [1000]
     assert data["b"] == [1001]
+
+
+def test_predicted_window_skips_out_of_range_timestamps(tmp_path: Path):
+    h = DropHistory(str(tmp_path))
+    h.record("123", 10**18)  # unparseable by datetime.fromtimestamp
+    h.record("123", _ts(0, 17, 0))
+    h.record("123", _ts(0, 17, 10))  # same slot, beyond dedupe window
+    assert h.in_predicted_window("123", datetime(2026, 10, 5, 17, 5))
