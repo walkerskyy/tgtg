@@ -305,7 +305,6 @@ class Telegram(Notifier):
 
     @_private
     async def _cancel_orders_menu(self, update: Update, _) -> None:
-        self.reservations.process_active_orders()
         buttons = [
             [InlineKeyboardButton(order.display_name, callback_data=order)] for order in self.reservations.active_orders.values()
         ]

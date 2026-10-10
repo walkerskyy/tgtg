@@ -200,6 +200,7 @@ class Reservations:
                 try:
                     self._create_order(reservation)
                     item.reservation_status = "reserved"
+                    item.reservation_amount = reservation.amount
                     callback(reservation)
                     self.remove(reservation.item_id)
                     log.info("Reservation completed for %s and removed from queue", reservation.display_name)
@@ -227,6 +228,7 @@ class Reservations:
                 continue
             state = res.get("state", "") if isinstance(res, dict) else ""
             if not isinstance(state, str) or not state:
+                log.warning("Order %s: unexpected status payload %r - skipping", order_id, res)
                 continue
             if state == "CONFIRMED":
                 if order.status != "CONFIRMED":
@@ -244,7 +246,7 @@ class Reservations:
                 log.info("Order %s entered terminal state %s for %s", order_id, state, order.display_name)
                 order.status = state
                 events.append(order)
-                del self.active_orders[order_id]
+                self.active_orders.pop(order_id, None)
                 changed = True
         if any(o.status == "CONFIRMED" for o in self.active_orders.values()):
             if self._prune_collected_orders():

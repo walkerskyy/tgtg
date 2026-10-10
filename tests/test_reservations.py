@@ -291,3 +291,27 @@ def test_confirmed_order_kept_while_still_active(reservations: Reservations):
     reservations.client.get_active.return_value = {"orders": [{"id": "o1"}]}  # type: ignore[attr-defined]
     reservations.process_active_orders()
     assert "o1" in reservations.active_orders
+
+
+def test_unpaid_warning_then_late_confirmation(reservations: Reservations):
+    old = int(time.time()) - 300
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="RESERVED", created_at=old)
+    reservations.client.get_order_status.return_value = {"state": "RESERVED"}  # type: ignore[attr-defined]
+    first = reservations.process_active_orders()
+    assert [o.status for o in first] == [UNPAID_WARNING]
+
+    reservations.client.get_order_status.return_value = {"state": "CONFIRMED"}  # type: ignore[attr-defined]
+    second = reservations.process_active_orders()
+    assert [o.status for o in second] == ["CONFIRMED"]
+    assert reservations.active_orders["o1"].status == "CONFIRMED"
+    third = reservations.process_active_orders()
+    assert third == []  # no repeat
+
+
+def test_confirmed_order_then_terminal_removes(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="CONFIRMED", created_at=int(time.time()))
+    reservations.client.get_order_status.return_value = {"state": "REFUNDED"}  # type: ignore[attr-defined]
+    reservations.client.get_active.return_value = {"orders": [{"id": "o1"}]}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert [o.status for o in notified] == ["REFUNDED"]
+    assert "o1" not in reservations.active_orders
