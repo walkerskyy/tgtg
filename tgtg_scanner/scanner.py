@@ -17,7 +17,9 @@ from tgtg_scanner.models import (
     Metrics,
     Reservations,
 )
+from tgtg_scanner.models.drop_history import DropHistory
 from tgtg_scanner.models.reservations import Reservation as ReservationObj
+from tgtg_scanner.models.reservations import is_sold_out_error
 from tgtg_scanner.models.stock_monitor import StockMonitor
 from tgtg_scanner.notifiers import Notifiers
 from tgtg_scanner.tgtg_client import BASE_URL, TgtgClient, extract_datadome, normalize_cookie, resolve_user_agent
@@ -64,6 +66,7 @@ class Scanner:
         elif self.config.token_path:
             reservations_dir = self.config.token_path
         self.reservations = Reservations(self.tgtg_client, reservations_dir)
+        self.drop_history = DropHistory(reservations_dir)
         self.favorites = Favorites(self.tgtg_client)
 
     @staticmethod
@@ -145,16 +148,7 @@ class Scanner:
         if self.notifiers is None:
             raise RuntimeError("Notifiers not initialized!")
 
-        for item in self._load_items():
-            if self.monitor.observe(item):
-                self._attempt_reservation(item)
-                if item.reservation_status == "reserved":
-                    self.reservations.remove(item.item_id)
-                    if self.notifiers:
-                        self.notifiers.send(ReservationObj(item.item_id, 1, item.display_name))
-                self._send_messages(item)
-                self.metrics.send_notifications.labels(item.item_id, item.display_name).inc()
-            self.metrics.update(item)
+        self._process_items(self._load_items())
 
         amounts = {item_id: item.items_available for item_id, item in self.monitor.state.items()}
         log.debug("new State: %s", amounts)
@@ -165,22 +159,53 @@ class Scanner:
 
         self._save_tokens()
 
+    def _process_items(self, items: list[Item]) -> None:
+        """Observe items, attempt reservations on transitions, send notifications."""
+        for item in items:
+            prev = self.monitor.state.get(item.item_id)
+            if self.monitor.observe(item):
+                if (
+                    prev is not None
+                    and prev.items_available == 0
+                    and item.items_available > 0
+                    and self.reservations.is_queued(item.item_id)
+                ):
+                    self.drop_history.record(item.item_id)
+                self._attempt_reservation(item)
+                if item.reservation_status == "reserved":
+                    self.reservations.remove(item.item_id)
+                    if self.notifiers:
+                        self.notifiers.send(
+                            ReservationObj(item.item_id, item.reservation_amount or 1, item.display_name, status="reserved")
+                        )
+                self._send_messages(item)
+                self.metrics.send_notifications.labels(item.item_id, item.display_name).inc()
+            self.metrics.update(item)
+
     def _attempt_reservation(self, item: Item) -> None:
-        if not self.reservations.is_queued(item.item_id):
+        reservation = self.reservations.get_reservation(item.item_id)
+        if reservation is None:
             return
-        log.info("Reserving 1 bag for %s", item.display_name)
+        if reservation.schedule and not reservation.schedule.is_now():
+            log.info("Outside schedule for %s - skipping reservation", item.display_name)
+            item.reservation_status = "skipped_schedule"
+            return
+        amount = reservation.amount or 1
+        log.info("Reserving %d bag(s) for %s", amount, item.display_name)
         try:
             if self.tgtg_client.session:
                 self.tgtg_client.session.last_api_request = None
-            order = self.tgtg_client.create_order(item.item_id, 1)
+            order = self.tgtg_client.create_order(item.item_id, amount)
             item.reservation_status = "reserved"
-            item.reservation_amount = 1
-            self.reservations.register_order(order["id"], item.item_id, 1, item.display_name)
-            log.info("Reserved 1 bag for %s (order_id=%s)", item.display_name, order["id"])
+            item.reservation_amount = amount
+            self.reservations.register_order(order["id"], item.item_id, amount, item.display_name)
+            log.info("Reserved %d bag(s) for %s (order_id=%s)", amount, item.display_name, order["id"])
         except TgtgAPIError as err:
             item.reservation_status = "failed"
             item.reservation_error = str(err)
             log.warning("Reservation failed for %s: %s", item.display_name, err)
+            if is_sold_out_error(err):
+                self.drop_history.record(item.item_id)
 
     def _send_messages(self, item: Item) -> None:
         """Send notifications for Item."""
