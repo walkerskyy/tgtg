@@ -110,7 +110,8 @@ def test_env_get(monkeypatch: pytest.MonkeyPatch):
     assert config.webhook.body == '{"content": "${{items_available}} panier(s) à ${{price}} € \nÀ récupérer 🍔"}'
 
 
-def test_fast_poll_default():
+def test_fast_poll_default(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("RESERVATION_FAST_POLL", raising=False)
     config = Config(disable_tests=True)
     assert config.reservation.fast_poll is True
 
