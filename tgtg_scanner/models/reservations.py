@@ -474,6 +474,8 @@ class Reservations:
             elif state == "PAYMENT_INITIATED":
                 if order.status in (PAYMENT_FAILED, PAYMENT_ACTION_REQUIRED):
                     pass  # already reported; keep watching until the order reaches a terminal state
+                elif order.status == PAYMENT_RETRY_PENDING:
+                    pass  # retry already scheduled (or just executed); executor owns it
                 elif order.status != "PAYMENT_INITIATED":
                     order.status = "PAYMENT_INITIATED"
                     changed = True

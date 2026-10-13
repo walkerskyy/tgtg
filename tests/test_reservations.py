@@ -753,6 +753,20 @@ def test_process_payment_failure_first_signal_is_silent(reservations: Reservatio
     assert "o1" in reservations.active_orders  # reservation still held until expiry
 
 
+def test_payment_retry_pending_status_survives_next_cycle(reservations: Reservations):
+    order = Order("o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1")
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "FAILED"}  # type: ignore[attr-defined]
+    assert reservations.process_active_orders() == []
+    assert order.status == PAYMENT_RETRY_PENDING
+    first_timer = order.pay_retry_at
+    assert first_timer is not None
+    assert reservations.process_active_orders() == []
+    assert order.status == PAYMENT_RETRY_PENDING  # not clobbered back to PAYMENT_INITIATED
+    assert order.pay_retry_at == first_timer  # timer not reset by duplicate signals
+
+
 def test_process_payment_action_required_first_signal_is_silent(reservations: Reservations):
     order = Order("o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1")
     reservations.active_orders["o1"] = order
@@ -762,6 +776,7 @@ def test_process_payment_action_required_first_signal_is_silent(reservations: Re
     assert notified == []
     assert order.status == PAYMENT_RETRY_PENDING
     assert order.pay_retry_at is not None
+    assert "o1" in reservations.active_orders
 
 
 def test_process_payment_action_required_alerts_after_fast_budget(reservations: Reservations):
@@ -775,6 +790,8 @@ def test_process_payment_action_required_alerts_after_fast_budget(reservations: 
     assert [o.status for o in notified] == [PAYMENT_ACTION_REQUIRED]
     assert order.pay_alerted is True
     assert order.pay_retry_at is not None
+    notified2 = reservations.process_active_orders()
+    assert notified2 == []
 
 
 def test_check_payment_logs_failure_reason(reservations: Reservations, caplog):
