@@ -1083,9 +1083,11 @@ def test_retry_executor_alerts_once_when_budget_exhausted(reservations: Reservat
     assert [o.status for o in notified] == [PAYMENT_FAILED]
     assert order.pay_alerted is True
     assert order.status == PAYMENT_FAILED
+    assert order.pay_attempts == 3
     assert order.pay_retry_at is not None
     order.pay_retry_at = int(time.time()) - 1  # due again next cycle
     notified2 = reservations.process_active_orders()
     assert notified2 == []
     assert "o1" in reservations.active_orders  # ledger keeps the order while retrying
     assert order.pay_retry_at is not None  # slow retry still armed
+    assert order.pay_attempts == 4
