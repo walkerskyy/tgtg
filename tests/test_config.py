@@ -130,21 +130,16 @@ def test_fast_poll_ini(tmp_path, monkeypatch: pytest.MonkeyPatch):
     assert config.reservation.fast_poll is False
 
 
-def test_pay_probe_default(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("RESERVATION_PAY_PROBE", raising=False)
+def test_pay_probe_flag_removed():
+    """Auto-pay is now always on; the old pay_probe config field must be gone."""
     config = Config(disable_tests=True)
-    assert config.reservation.pay_probe is False
+    assert not hasattr(config.reservation, "pay_probe")
 
 
-def test_pay_probe_env(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("RESERVATION_PAY_PROBE", "true")
-    config = Config(disable_tests=True)
-    assert config.reservation.pay_probe is True
-
-
-def test_pay_probe_ini(tmp_path, monkeypatch: pytest.MonkeyPatch):
+def test_legacy_pay_probe_ini_ignored(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """A leftover PayProbe key from an old config.ini must not crash startup."""
     monkeypatch.delenv("RESERVATION_PAY_PROBE", raising=False)
     ini = tmp_path / "config.ini"
     ini.write_text("[RESERVATION]\nPayProbe = true\n")
     config = Config(str(ini), disable_tests=True)
-    assert config.reservation.pay_probe is True
+    assert config.reservation.fast_poll is True  # default unaffected

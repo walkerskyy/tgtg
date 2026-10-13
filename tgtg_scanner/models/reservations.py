@@ -211,9 +211,8 @@ RESERVATIONS_FILE = "reservations.json"
 
 
 class Reservations:
-    def __init__(self, client: TgtgClient, persist_dir: str | None = None, pay_probe: bool = False) -> None:
+    def __init__(self, client: TgtgClient, persist_dir: str | None = None) -> None:
         self.client = client
-        self.pay_probe = pay_probe
         self.reservation_query: list[Reservation] = []
         self.active_orders: dict[str, Order] = {}
         self._probe_methods: dict[str, dict] = {}
@@ -281,8 +280,7 @@ class Reservations:
             order_id, item_id, amount, display_name, status="RESERVED", created_at=int(time.time()), price=price
         )
         self._save()
-        if self.pay_probe:
-            self._probe_payment(order_id, item_id, display_name)
+        self._probe_payment(order_id, item_id, display_name)
 
     def reserve(self, item_id: str, display_name: str, amount: int = 1) -> None:
         """Create a new reservation.
@@ -497,14 +495,14 @@ class Reservations:
         order_id = res.get("id")
         if order_id:
             price = _extract_price(res)
-            if self.pay_probe and price is None:
+            if price is None:
                 log.warning("PAYPROBE create_order response has no price (keys=%s)", sorted(res))
             self.register_order(order_id, reservation.item_id, reservation.amount, reservation.display_name, price=price)
             log.info("Order created for %s (order_id=%s)", reservation.display_name, order_id)
 
     def prefetch_probe_methods(self, item_id: str) -> None:
-        """PayProbe: fetch item payment methods BEFORE the order exists (server requires a pre-order fetch)."""
-        if not self.pay_probe or item_id in self._probe_methods:
+        """Auto-pay: fetch item payment methods BEFORE the order exists (server requires a pre-order fetch)."""
+        if item_id in self._probe_methods:
             return
         try:
             methods = self.client.get_payment_methods(item_id=item_id)

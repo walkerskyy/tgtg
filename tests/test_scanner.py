@@ -289,7 +289,6 @@ def test_fast_job_favorites_and_one_non_favorite(scanner: Scanner, tgtg_item: di
 
 def test_attempt_reservation_prefetches_probe_methods(scanner: Scanner, test_item: Item, mocker: MockerFixture):
     scanner.reservations.reserve(test_item.item_id, test_item.display_name)
-    scanner.reservations.pay_probe = True
     mock_prefetch = mocker.patch.object(scanner.reservations, "prefetch_probe_methods")
     mocker.patch.object(scanner.tgtg_client, "create_order", return_value={"id": "ord_1"})
 

@@ -66,7 +66,7 @@ class Scanner:
             reservations_dir = str(Path(self.config.file).parent)
         elif self.config.token_path:
             reservations_dir = self.config.token_path
-        self.reservations = Reservations(self.tgtg_client, reservations_dir, pay_probe=self.config.reservation.pay_probe)
+        self.reservations = Reservations(self.tgtg_client, reservations_dir)
         self.drop_history = DropHistory(reservations_dir)
         self._rr_index = 0
         self.favorites = Favorites(self.tgtg_client)

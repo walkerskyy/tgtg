@@ -425,14 +425,6 @@ def test_make_orders_non_sold_out_error_no_callback(reservations: Reservations, 
     sold_out_mock.assert_not_called()
 
 
-def test_pay_probe_disabled_by_default(reservations: Reservations, tgtg_item: dict):
-    callback_mock = MagicMock()
-    reservations.reserve("123", "Test Item")
-    reservations.make_orders({"123": Item(tgtg_item)}, callback_mock)
-    reservations.client.get_payment_methods.assert_not_called()  # type: ignore[attr-defined]
-    reservations.client.pay_order.assert_not_called()  # type: ignore[attr-defined]
-
-
 def test_pay_probe_runs_after_order_created(tgtg_item: dict):
     client = MagicMock()
     client.create_order.return_value = {"id": "o1"}
@@ -445,7 +437,7 @@ def test_pay_probe_runs_after_order_created(tgtg_item: dict):
     client.create_payment.return_value = {"payments": [{"payment_id": "p1"}]}
     client.pay_order.return_value = {"payment_id": "p1"}
     client.get_payment_status.return_value = {"state": "PENDING"}
-    r = Reservations(client, pay_probe=True)
+    r = Reservations(client)
     r.reserve("123", "Test Item")
     r.make_orders({"123": Item(tgtg_item)}, MagicMock())
     assert "o1" in r.active_orders
@@ -465,7 +457,7 @@ def test_pay_probe_failure_does_not_break_reservation(tgtg_item: dict):
     client.get_payment_methods.side_effect = RuntimeError("probe boom")
     client.get_vouchers.side_effect = RuntimeError("probe boom")
     client.pay_order.side_effect = RuntimeError("probe boom")
-    r = Reservations(client, pay_probe=True)
+    r = Reservations(client)
     r.reserve("123", "Test Item")
     callback_mock = MagicMock()
     r.make_orders({"123": Item(tgtg_item)}, callback_mock)
@@ -488,7 +480,7 @@ def test_pay_probe_runs_on_register_order():
     client.create_payment.return_value = {"payments": [{"payment_id": "p1"}]}
     client.pay_order.return_value = {"payment_id": "p1"}
     client.get_payment_status.return_value = {"state": "PENDING"}
-    r = Reservations(client, pay_probe=True)
+    r = Reservations(client)
     r.register_order("o9", "123", 1, "Test Bag")
     client.create_payment.assert_called_once_with("o9")  # type: ignore[attr-defined]
     client.pay_order.assert_called_once()  # type: ignore[attr-defined]
@@ -504,7 +496,7 @@ def test_pay_probe_runs_on_register_order():
 def test_pay_probe_skips_pay_without_adyen_payload():
     client = MagicMock()
     client.get_payment_methods.return_value = {"payment_methods": []}
-    r = Reservations(client, pay_probe=True)
+    r = Reservations(client)
     r.register_order("o10", "123", 1, "Test Bag")
     client.create_payment.assert_not_called()  # type: ignore[attr-defined]
     client.pay_order.assert_not_called()  # type: ignore[attr-defined]
@@ -523,7 +515,7 @@ def test_create_order_price_from_order_line(tgtg_item: dict):
     price = {"currency": "AUD", "decimals": 2, "minor_units": 850}
     client = MagicMock()
     client.create_order.return_value = {"id": "o31", "order_line": {"total_price": price}}
-    r = Reservations(client, pay_probe=False)
+    r = Reservations(client)
     r.reserve("123", "Test Item")
     r.make_orders({"123": Item(tgtg_item)}, MagicMock())
     assert r.active_orders["o31"].price == price
@@ -544,7 +536,7 @@ def test_probe_fetches_order_detail_when_create_lacks_price(tgtg_item: dict):
     client.create_payment.return_value = {"payments": []}
     client.pay_order.return_value = {"payments": []}
     client.get_payment_status.return_value = {"state": "PENDING"}
-    r = Reservations(client, pay_probe=True)
+    r = Reservations(client)
     r.reserve("123", "Test Item")
     r.make_orders({"123": Item(tgtg_item)}, MagicMock())
     client.get_order_detail.assert_called_once_with("o32")  # type: ignore[attr-defined]
@@ -567,7 +559,7 @@ def test_create_order_stores_total_price_and_pay_includes_amount(tgtg_item: dict
     client.create_payment.return_value = {"payments": [{"payment_id": "p1"}]}
     client.pay_order.return_value = {"payments": [{"payment_id": "p1"}]}
     client.get_payment_status.return_value = {"state": "PENDING"}
-    r = Reservations(client, pay_probe=True)
+    r = Reservations(client)
     r.reserve("123", "Test Item")
     r.make_orders({"123": Item(tgtg_item)}, MagicMock())
     assert r.active_orders["o30"].price == price
@@ -585,7 +577,7 @@ def test_pay_probe_retries_pay_once(mocker):
     client.pay_order.side_effect = [RuntimeError("too fast"), {"payment_id": "p2"}]
     client.get_payment_status.return_value = {"state": "PENDING"}
     mocker.patch("time.sleep")
-    r = Reservations(client, pay_probe=True)
+    r = Reservations(client)
     r.register_order("o11", "123", 1, "Test Bag")
     assert client.pay_order.call_count == 2
     client.get_payment_status.assert_called_once_with("p2")  # type: ignore[attr-defined]
@@ -616,7 +608,7 @@ def test_pay_probe_saved_card_token_when_item_methods_fail(tgtg_item: dict):
     client.pay_order.return_value = {"payments": [{"payment_id": "p1"}]}
     client.get_payment_status.return_value = {"state": "PENDING"}
     price = {"currency": "AUD", "decimals": 2, "minor_units": 850}
-    r = Reservations(client, pay_probe=True)
+    r = Reservations(client)
     r.register_order("o20", "123", 1, "Test Bag", price=price)
     client.create_payment.assert_called_once_with("o20")  # type: ignore[attr-defined]
     client.payment_biometrics.assert_called_once_with("p1")  # type: ignore[attr-defined]
@@ -648,7 +640,7 @@ def test_prefetched_methods_used_by_probe_without_refetch():
     client.create_payment.return_value = {"payments": [{"payment_id": "p1"}]}
     client.pay_order.return_value = {"payments": [{"payment_id": "p1"}]}
     client.get_payment_status.return_value = {"state": "PENDING"}
-    r = Reservations(client, pay_probe=True)
+    r = Reservations(client)
     r.prefetch_probe_methods("123")
     r.register_order("o30", "123", 1, "Test Bag")
     # exactly one item-scoped fetch (prefetch); the other call is the saved-cards lookup
@@ -658,8 +650,12 @@ def test_prefetched_methods_used_by_probe_without_refetch():
     assert body["authorizations"][0]["authorization_payload"]["payload"] == '{"type":"cardcfg"}'
 
 
-def test_prefetch_disabled_without_pay_probe():
+def test_prefetch_runs_by_default():
     client = MagicMock()
-    r = Reservations(client, pay_probe=False)
+    client.get_payment_methods.return_value = {"payment_methods_state": "SUCCESS", "payment_methods": []}
+    r = Reservations(client)
     r.prefetch_probe_methods("123")
-    client.get_payment_methods.assert_not_called()  # type: ignore[attr-defined]
+    client.get_payment_methods.assert_called_once_with(item_id="123")  # type: ignore[attr-defined]
+    # second call is cached
+    r.prefetch_probe_methods("123")
+    assert client.get_payment_methods.call_count == 1  # type: ignore[attr-defined]
