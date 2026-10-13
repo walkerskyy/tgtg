@@ -1,5 +1,6 @@
 import json
 import time
+from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -11,6 +12,7 @@ from tgtg_scanner.models.item import Item
 from tgtg_scanner.models.reservations import (
     PAYMENT_ACTION_REQUIRED,
     PAYMENT_FAILED,
+    PAYMENT_RETRY_PENDING,
     UNPAID_WARNING,
     Order,
     Reservation,
@@ -674,6 +676,29 @@ def test_prefetch_runs_by_default():
 def test_order_from_dict_keeps_payment_id():
     order = _order_from_dict({"id": "o1", "payment_id": "p9", "created_at": 5})
     assert order.payment_id == "p9"
+
+
+def test_order_retry_fields_roundtrip():
+    order = Order(
+        "o1",
+        "123",
+        1,
+        "Test",
+        status=PAYMENT_RETRY_PENDING,
+        created_at=1,
+        payment_id="p1",
+        pay_attempts=2,
+        pay_retry_at=1760000000,
+        pay_alerted=True,
+    )
+    restored = _order_from_dict(asdict(order))
+    assert restored.pay_attempts == 2
+    assert restored.pay_retry_at == 1760000000
+    assert restored.pay_alerted is True
+    legacy = _order_from_dict({"id": "o2", "item_id": "123", "amount": 1, "display_name": "T", "status": "RESERVED"})
+    assert legacy.pay_attempts == 0
+    assert legacy.pay_retry_at is None
+    assert legacy.pay_alerted is False
 
 
 def _probe_client() -> MagicMock:

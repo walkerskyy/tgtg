@@ -15,6 +15,7 @@ log = logging.getLogger("tgtg")
 UNPAID_WARNING = "UNPAID_WARNING"
 PAYMENT_FAILED = "PAYMENT_FAILED"
 PAYMENT_ACTION_REQUIRED = "PAYMENT_ACTION_REQUIRED"
+PAYMENT_RETRY_PENDING = "PAYMENT_RETRY_PENDING"
 PAYMENT_DEADLINE = 270  # seconds; TGTG reservation hold is ~5 minutes
 SOLD_OUT_MARKERS = ("sold out", "no longer available", "not available", "out of stock")
 TERMINAL_STATES = frozenset({"CANCELED", "CANCELLED", "EXPIRED", "REFUNDED", "ABORTED"})
@@ -167,6 +168,9 @@ class Order:
     created_at: int | None = None
     price: dict | None = None
     payment_id: str | None = None
+    pay_attempts: int = 0
+    pay_retry_at: int | None = None
+    pay_alerted: bool = False
 
 
 @dataclass
@@ -215,6 +219,9 @@ def _order_from_dict(data: dict) -> Order:
         created_at=int(data["created_at"]) if data.get("created_at") is not None else None,
         price=data.get("price"),
         payment_id=data.get("payment_id"),
+        pay_attempts=int(data.get("pay_attempts", 0) or 0),
+        pay_retry_at=int(data["pay_retry_at"]) if data.get("pay_retry_at") is not None else None,
+        pay_alerted=bool(data.get("pay_alerted", False)),
     )
 
 
