@@ -380,6 +380,49 @@ class Reservations:
                     if on_sold_out is not None and is_sold_out_error(exc):
                         on_sold_out(reservation.item_id)
 
+    def _handle_payment_failure(self, order: Order, order_id: str, events: list[Order], reason: str, alert_status: str) -> bool:
+        """Schedule a silent auto-retry, or alert once the fast budget is exhausted.
+
+        Returns True when order state changed (persisted by the caller).
+        """
+        if order.status in ("PAID", "CONFIRMED"):
+            return False
+        if order.pay_retry_at is not None:
+            return False  # a retry is already scheduled; the executor owns the next step
+        now = int(time.time())
+        if order.pay_attempts < 2:
+            backoff = 15 if order.pay_attempts == 0 else 45
+            order.status = PAYMENT_RETRY_PENDING
+            order.pay_retry_at = now + backoff
+            log.warning(
+                "Payment for order %s (%s): %s - auto-retry scheduled in %ds (attempt %d of 2 fast)",
+                order_id,
+                order.display_name,
+                reason,
+                backoff,
+                order.pay_attempts + 1,
+            )
+            return True
+        order.status = alert_status
+        order.pay_retry_at = now + 60
+        if not order.pay_alerted:
+            order.pay_alerted = True
+            events.append(order)
+            log.warning(
+                "Payment for order %s (%s): %s - fast retries exhausted; alerting user, slow retries continue every 60s",
+                order_id,
+                order.display_name,
+                reason,
+            )
+        else:
+            log.info(
+                "Payment for order %s (%s): %s - re-arming slow retry in 60s",
+                order_id,
+                order.display_name,
+                reason,
+            )
+        return True
+
     def process_active_orders(self) -> list[Order]:
         """Check every tracked order's status and report transitions.
 

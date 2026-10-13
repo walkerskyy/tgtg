@@ -803,3 +803,77 @@ def test_paid_order_does_not_poll_payment(reservations: Reservations):
     notified = reservations.process_active_orders()
     assert notified == []
     reservations.client.get_payment_status.assert_not_called()  # type: ignore[attr-defined]
+
+
+def _retry_order(**kwargs) -> Order:
+    defaults: dict = dict(
+        id="o1",
+        item_id="123",
+        amount=1,
+        display_name="T",
+        status="PAYMENT_INITIATED",
+        created_at=int(time.time()),
+        payment_id="p1",
+    )
+    defaults.update(kwargs)
+    return Order(**defaults)
+
+
+def test_payment_failure_first_signal_schedules_silent_retry(reservations: Reservations):
+    order = _retry_order()
+    reservations.active_orders["o1"] = order
+    events: list[Order] = []
+    before = int(time.time())
+    changed = reservations._handle_payment_failure(order, "o1", events, "payment state FAILED (risk_declined)", PAYMENT_FAILED)
+    assert changed is True
+    assert order.status == PAYMENT_RETRY_PENDING
+    assert order.pay_retry_at is not None
+    assert 1 <= order.pay_retry_at - before <= 15
+    assert events == []
+
+
+def test_payment_failure_second_signal_schedules_45s(reservations: Reservations):
+    order = _retry_order(pay_attempts=1)
+    reservations.active_orders["o1"] = order
+    events: list[Order] = []
+    before = int(time.time())
+    changed = reservations._handle_payment_failure(order, "o1", events, "retry attempt 1 failed", PAYMENT_FAILED)
+    assert changed is True
+    assert order.status == PAYMENT_RETRY_PENDING
+    assert order.pay_retry_at is not None
+    assert 30 <= order.pay_retry_at - before <= 45
+    assert events == []
+
+
+def test_payment_failure_exhausts_budget_and_alerts_once(reservations: Reservations):
+    order = _retry_order(pay_attempts=2)
+    reservations.active_orders["o1"] = order
+    events: list[Order] = []
+    changed = reservations._handle_payment_failure(order, "o1", events, "retry attempt 2 failed", PAYMENT_FAILED)
+    assert changed is True
+    assert order.status == PAYMENT_FAILED
+    assert order.pay_alerted is True
+    assert order.pay_retry_at is not None
+    assert 50 <= order.pay_retry_at - int(time.time()) <= 60
+    assert events == [order]
+    events2: list[Order] = []
+    assert reservations._handle_payment_failure(order, "o1", events2, "retry attempt 3 failed", PAYMENT_FAILED) is False
+    assert events2 == []
+
+
+def test_payment_failure_ignored_while_retry_scheduled(reservations: Reservations):
+    order = _retry_order(status=PAYMENT_RETRY_PENDING, pay_retry_at=int(time.time()) + 100)
+    reservations.active_orders["o1"] = order
+    events: list[Order] = []
+    assert reservations._handle_payment_failure(order, "o1", events, "duplicate signal", PAYMENT_FAILED) is False
+    assert order.status == PAYMENT_RETRY_PENDING
+    assert events == []
+
+
+def test_payment_failure_ignored_for_paid_order(reservations: Reservations):
+    order = _retry_order(status="PAID")
+    reservations.active_orders["o1"] = order
+    events: list[Order] = []
+    assert reservations._handle_payment_failure(order, "o1", events, "late signal", PAYMENT_FAILED) is False
+    assert order.status == "PAID"
+    assert events == []
