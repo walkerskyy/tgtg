@@ -42,13 +42,13 @@ DEFAULT_SUPPORTED_TYPES: list[dict] = [
             "TWINT",
             "MBWAY",
             "BLIK",
+            "CASH_APP_PAY",
             "GOOGLEPAY",
         ],
     },
-    {"provider": "VOUCHER", "payment_types": ["VOUCHER", "FAKE_DOOR"]},
-    {"provider": "BRAINTREE", "payment_types": ["VENMO"]},
     {"provider": "CHARITY", "payment_types": ["CHARITY"]},
     {"provider": "SATISPAY", "payment_types": ["SATISPAY"]},
+    {"provider": "EDENRED", "payment_types": ["EDENRED"]},
 ]
 
 

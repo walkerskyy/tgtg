@@ -218,8 +218,31 @@ def test_get_payment_methods_for_item():
     client.login = lambda: None  # type: ignore[method-assign]
     assert client.get_payment_methods("123") == {"payment_methods": []}
     body = json.loads(responses.calls[1].request.body)
-    assert body["supported_types"][0]["provider"] == "ADYEN"
-    assert "CREDITCARD" in body["supported_types"][0]["payment_types"]
+    # exact request SupportedPaymentProviderConstant builds in APK 26.10.0
+    assert body == {
+        "supported_types": [
+            {
+                "provider": "ADYEN",
+                "payment_types": [
+                    "CREDITCARD",
+                    "SOFORT",
+                    "IDEAL",
+                    "PAYPAL",
+                    "BCMCMOBILE",
+                    "BCMCCARD",
+                    "VIPPS",
+                    "TWINT",
+                    "MBWAY",
+                    "BLIK",
+                    "CASH_APP_PAY",
+                    "GOOGLEPAY",
+                ],
+            },
+            {"provider": "CHARITY", "payment_types": ["CHARITY"]},
+            {"provider": "SATISPAY", "payment_types": ["SATISPAY"]},
+            {"provider": "EDENRED", "payment_types": ["EDENRED"]},
+        ]
+    }
 
 
 @responses.activate

@@ -468,6 +468,29 @@ def test_pay_probe_skips_pay_without_adyen_payload():
     client.pay_order.assert_not_called()  # type: ignore[attr-defined]
 
 
+def test_create_order_stores_total_price_and_pay_includes_amount(tgtg_item: dict):
+    """Authorization.amount must carry the order's total_price (app always passes Price)."""
+    client = MagicMock()
+    price = {"currency": "AUD", "decimals": 2, "minor_units": 850}
+    client.create_order.return_value = {"id": "o30", "total_price": price}
+    client.get_payment_methods.return_value = {
+        "payment_methods_state": "SUCCESS",
+        "payment_methods": [
+            {"payment_type": "CREDITCARD", "payment_provider": "ADYEN", "adyen_api_payload": '{"type":"cardcfg"}'},
+        ],
+    }
+    client.create_payment.return_value = {"payments": [{"payment_id": "p1"}]}
+    client.pay_order.return_value = {"payments": [{"payment_id": "p1"}]}
+    client.get_payment_status.return_value = {"state": "PENDING"}
+    r = Reservations(client, pay_probe=True)
+    r.reserve("123", "Test Item")
+    r.make_orders({"123": Item(tgtg_item)}, MagicMock())
+    assert r.active_orders["o30"].price == price
+    body = client.pay_order.call_args[0][1]  # type: ignore[attr-defined]
+    assert body["authorizations"][0]["amount"] == price
+    assert body["authorizations"][0]["authorization_payload"]["payload"] == '{"type":"cardcfg"}'
+
+
 def test_pay_probe_retries_pay_once(mocker):
     client = MagicMock()
     client.get_payment_methods.return_value = {
@@ -507,12 +530,15 @@ def test_pay_probe_saved_card_token_when_item_methods_fail(tgtg_item: dict):
     }
     client.pay_order.return_value = {"payments": [{"payment_id": "p1"}]}
     client.get_payment_status.return_value = {"state": "PENDING"}
+    price = {"currency": "AUD", "decimals": 2, "minor_units": 850}
     r = Reservations(client, pay_probe=True)
-    r.register_order("o20", "123", 1, "Test Bag")
+    r.register_order("o20", "123", 1, "Test Bag", price=price)
     client.create_payment.assert_called_once_with("o20")  # type: ignore[attr-defined]
     client.payment_biometrics.assert_called_once_with("p1")  # type: ignore[attr-defined]
     client.pay_order.assert_called_once()  # type: ignore[attr-defined]
-    payload = client.pay_order.call_args[0][1]["authorizations"][0]["authorization_payload"]  # type: ignore[attr-defined]
+    body = client.pay_order.call_args[0][1]  # type: ignore[attr-defined]
+    assert body["authorizations"][0]["amount"] == price
+    payload = body["authorizations"][0]["authorization_payload"]
     assert payload["payment_method_token"] == "tok"
     assert payload["biometrics_protected_secret"] == "sec"
     assert payload["payment_type"] == "CREDITCARD"

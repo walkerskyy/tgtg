@@ -53,22 +53,21 @@ def _choose_payment_method(entries: list) -> dict | None:
     return None
 
 
-def _authorization_body(method: dict) -> dict:
+def _authorization_body(method: dict, price: dict | None = None) -> dict:
     """Build the app-shaped pay body from a payment_methods entry (payload straight from TGTG)."""
-    return {
-        "authorizations": [
-            {
-                "authorization_payload": {
-                    "payload": method.get("adyen_api_payload") or "",
-                    "payment_type": str(method.get("payment_type") or "CREDITCARD"),
-                    "save_payment_method": False,
-                    "type": "adyenAuthorizationPayload",
-                },
-                "payment_provider": str(method.get("payment_provider") or "ADYEN"),
-                "return_url": "adyencheckout://com.app.tgtg.itemview",
-            }
-        ]
+    auth: dict = {
+        "authorization_payload": {
+            "payload": method.get("adyen_api_payload") or "",
+            "payment_type": str(method.get("payment_type") or "CREDITCARD"),
+            "save_payment_method": False,
+            "type": "adyenAuthorizationPayload",
+        },
+        "payment_provider": str(method.get("payment_provider") or "ADYEN"),
+        "return_url": "adyencheckout://com.app.tgtg.itemview",
     }
+    if price is not None:
+        auth["amount"] = price
+    return {"authorizations": [auth]}
 
 
 def _saved_card_from(response: object) -> dict | None:
@@ -84,7 +83,7 @@ def _saved_card_from(response: object) -> dict | None:
     return None
 
 
-def _saved_card_authorization(card: dict, biometrics: dict | None) -> dict:
+def _saved_card_authorization(card: dict, biometrics: dict | None, price: dict | None = None) -> dict:
     """Pay with a saved card: server-side card identifier + tokens from payment/v4 biometrics."""
     token = None
     secret = None
@@ -99,15 +98,14 @@ def _saved_card_authorization(card: dict, biometrics: dict | None) -> dict:
     }
     if secret:
         payload["biometrics_protected_secret"] = secret
-    return {
-        "authorizations": [
-            {
-                "authorization_payload": payload,
-                "payment_provider": str(card.get("payment_provider") or "ADYEN"),
-                "return_url": "adyencheckout://com.app.tgtg.itemview",
-            }
-        ]
+    auth: dict = {
+        "authorization_payload": payload,
+        "payment_provider": str(card.get("payment_provider") or "ADYEN"),
+        "return_url": "adyencheckout://com.app.tgtg.itemview",
     }
+    if price is not None:
+        auth["amount"] = price
+    return {"authorizations": [auth]}
 
 
 def _first_payment_id(result: object) -> str | None:
@@ -133,6 +131,7 @@ class Order:
     display_name: str
     status: str | None = None
     created_at: int | None = None
+    price: dict | None = None
 
 
 @dataclass
@@ -162,6 +161,7 @@ def _order_from_dict(data: dict) -> Order:
         display_name=data.get("display_name", ""),
         status=data.get("status"),
         created_at=int(data["created_at"]) if data.get("created_at") is not None else None,
+        price=data.get("price"),
     )
 
 
@@ -234,9 +234,9 @@ class Reservations:
         except OSError as err:
             log.error("Failed to save reservations: %s", err)
 
-    def register_order(self, order_id: str, item_id: str, amount: int, display_name: str) -> None:
+    def register_order(self, order_id: str, item_id: str, amount: int, display_name: str, price: dict | None = None) -> None:
         self.active_orders[order_id] = Order(
-            order_id, item_id, amount, display_name, status="RESERVED", created_at=int(time.time())
+            order_id, item_id, amount, display_name, status="RESERVED", created_at=int(time.time()), price=price
         )
         self._save()
         if self.pay_probe:
@@ -444,7 +444,10 @@ class Reservations:
         res = self.client.create_order(reservation.item_id, reservation.amount)
         order_id = res.get("id")
         if order_id:
-            self.register_order(order_id, reservation.item_id, reservation.amount, reservation.display_name)
+            price = res.get("total_price") if isinstance(res.get("total_price"), dict) else None
+            if self.pay_probe and price is None:
+                log.warning("PAYPROBE create_order response has no total_price (keys=%s)", sorted(res))
+            self.register_order(order_id, reservation.item_id, reservation.amount, reservation.display_name, price=price)
             log.info("Order created for %s (order_id=%s)", reservation.display_name, order_id)
 
     def prefetch_probe_methods(self, item_id: str) -> None:
@@ -462,6 +465,12 @@ class Reservations:
     def _probe_payment(self, order_id: str, item_id: str, display_name: str) -> None:
         """PayProbe: walk the app's pay flow against a fresh order. Never raises."""
         log.info("PAYPROBE probing payment endpoints for order %s (%s)", order_id, display_name)
+        price: dict | None = None
+        order = self.active_orders.get(order_id)
+        if order is not None:
+            price = order.price
+        if price is not None:
+            log.info("PAYPROBE order price: %s", price)
         saved_card: dict | None = None
         try:
             saved = self.client.get_payment_methods()
@@ -501,11 +510,13 @@ class Reservations:
             except Exception as exc:
                 log.warning("PAYPROBE biometrics failed: %s", exc)
         if saved_card is not None:
-            body = _saved_card_authorization(saved_card, biometrics)
+            body = _saved_card_authorization(saved_card, biometrics, price)
             log.info("PAYPROBE auth: saved-card token (identifier=%s)", saved_card.get("identifier"))
         else:
-            body = _authorization_body(chosen)  # type: ignore[arg-type]
+            body = _authorization_body(chosen, price)  # type: ignore[arg-type]
             log.info("PAYPROBE chosen: %s", _redact_secrets(chosen))
+        if price is None:
+            log.warning("PAYPROBE no order price available; authorization amount omitted")
         self._log_order_status(order_id)
         result = None
         last_exc: Exception | None = None
