@@ -203,12 +203,15 @@ class ReservationConfig(BaseConfig):
     """Reservation / smart-reserve settings."""
 
     fast_poll: bool = True
+    pay_probe: bool = False
 
     def _read_ini(self, parser: configparser.ConfigParser):
         self._ini_get_boolean(parser, "RESERVATION", "FastPoll", "fast_poll")
+        self._ini_get_boolean(parser, "RESERVATION", "PayProbe", "pay_probe")
 
     def _read_env(self):
         self._env_get_boolean("RESERVATION_FAST_POLL", "fast_poll")
+        self._env_get_boolean("RESERVATION_PAY_PROBE", "pay_probe")
 
 
 @dataclass

@@ -128,3 +128,23 @@ def test_fast_poll_ini(tmp_path, monkeypatch: pytest.MonkeyPatch):
     ini.write_text("[RESERVATION]\nFastPoll = false\n")
     config = Config(str(ini), disable_tests=True)
     assert config.reservation.fast_poll is False
+
+
+def test_pay_probe_default(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("RESERVATION_PAY_PROBE", raising=False)
+    config = Config(disable_tests=True)
+    assert config.reservation.pay_probe is False
+
+
+def test_pay_probe_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("RESERVATION_PAY_PROBE", "true")
+    config = Config(disable_tests=True)
+    assert config.reservation.pay_probe is True
+
+
+def test_pay_probe_ini(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("RESERVATION_PAY_PROBE", raising=False)
+    ini = tmp_path / "config.ini"
+    ini.write_text("[RESERVATION]\nPayProbe = true\n")
+    config = Config(str(ini), disable_tests=True)
+    assert config.reservation.pay_probe is True

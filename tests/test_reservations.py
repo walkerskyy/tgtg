@@ -381,3 +381,44 @@ def test_make_orders_non_sold_out_error_no_callback(reservations: Reservations, 
     reservations.reserve("123", "Test Item")
     reservations.make_orders({"123": Item(tgtg_item)}, MagicMock(), on_sold_out=sold_out_mock)
     sold_out_mock.assert_not_called()
+
+
+def test_pay_probe_disabled_by_default(reservations: Reservations, tgtg_item: dict):
+    callback_mock = MagicMock()
+    reservations.reserve("123", "Test Item")
+    reservations.make_orders({"123": Item(tgtg_item)}, callback_mock)
+    reservations.client.get_payment_methods.assert_not_called()  # type: ignore[attr-defined]
+    reservations.client.pay_order.assert_not_called()  # type: ignore[attr-defined]
+
+
+def test_pay_probe_runs_after_order_created(tgtg_item: dict):
+    client = MagicMock()
+    client.create_order.return_value = {"id": "o1"}
+    client.get_payment_methods.return_value = {"payment_methods": []}
+    client.get_vouchers.return_value = {"vouchers": []}
+    client.pay_order.return_value = {"payment_id": "p1"}
+    client.get_payment_status.return_value = {"state": "PENDING"}
+    r = Reservations(client, pay_probe=True)
+    r.reserve("123", "Test Item")
+    r.make_orders({"123": Item(tgtg_item)}, MagicMock())
+    assert "o1" in r.active_orders
+    assert len(r.reservation_query) == 0
+    client.get_vouchers.assert_called_once()  # type: ignore[attr-defined]
+    client.pay_order.assert_called_once()  # type: ignore[attr-defined]
+    assert client.pay_order.call_args[0][0] == "o1"  # type: ignore[attr-defined]
+    client.get_payment_status.assert_called_once_with("p1")  # type: ignore[attr-defined]
+
+
+def test_pay_probe_failure_does_not_break_reservation(tgtg_item: dict):
+    client = MagicMock()
+    client.create_order.return_value = {"id": "o2"}
+    client.get_payment_methods.side_effect = RuntimeError("probe boom")
+    client.get_vouchers.side_effect = RuntimeError("probe boom")
+    client.pay_order.side_effect = RuntimeError("probe boom")
+    r = Reservations(client, pay_probe=True)
+    r.reserve("123", "Test Item")
+    callback_mock = MagicMock()
+    r.make_orders({"123": Item(tgtg_item)}, callback_mock)
+    assert "o2" in r.active_orders
+    assert len(r.reservation_query) == 0
+    callback_mock.assert_called_once()

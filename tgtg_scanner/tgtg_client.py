@@ -14,10 +14,12 @@ import re
 import sys
 import webbrowser
 from collections.abc import Iterator
+from http import HTTPStatus
 
 import tgtg
 from tgtg import BASE_URL
 from tgtg import TgtgClient as _UpstreamTgtgClient
+from tgtg.exceptions import TgtgAPIError
 
 from tgtg_scanner.pin_prompt import prompt_via_browser
 
@@ -201,3 +203,42 @@ class TgtgClient(_UpstreamTgtgClient):
             "refresh_token": self.refresh_token,
             "datadome_cookie": extract_datadome(self),
         }
+
+    def get_payment_methods(self, item_id: str | None = None) -> dict:
+        """List saved payment methods (account-level or item-specific)."""
+        self.login()
+        path = f"paymentMethod/v1/item/{item_id}" if item_id else "paymentMethod/v1/"
+        response = self._post(self._get_url(path), json={})
+        if response.status_code != HTTPStatus.OK:
+            raise TgtgAPIError(response.status_code, response.content)
+        return response.json()
+
+    def get_vouchers(self) -> dict:
+        """List vouchers / gift cards on the account."""
+        self.login()
+        response = self._post(self._get_url("voucher/v3/"), json={})
+        if response.status_code != HTTPStatus.OK:
+            raise TgtgAPIError(response.status_code, response.content)
+        return response.json()
+
+    def pay_order(self, order_id: str, payment: dict) -> dict:
+        """Post a payment authorization for an order (v8 endpoint, v7 fallback)."""
+        self.login()
+        last_error: TgtgAPIError | None = None
+        for endpoint in ("order/v8/{}/pay", "order/v7/{}/pay"):
+            response = self._post(self._get_url(endpoint.format(order_id)), json=payment)
+            if response.status_code == HTTPStatus.NOT_FOUND:
+                last_error = TgtgAPIError(response.status_code, response.content)
+                continue
+            if response.status_code == HTTPStatus.OK:
+                return response.json()
+            raise TgtgAPIError(response.status_code, response.content)
+        raise last_error if last_error is not None else TgtgAPIError(404, b"no pay endpoint")
+
+    def get_payment_status(self, payment_id: str) -> dict:
+        """Poll payment state for a payment started via pay_order."""
+        self.login()
+        response = self._post(self._get_url(f"payment/v3/{payment_id}"))
+        if response.status_code != HTTPStatus.OK:
+            raise TgtgAPIError(response.status_code, response.content)
+        return response.json()

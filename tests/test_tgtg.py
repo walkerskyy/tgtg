@@ -175,3 +175,144 @@ def test_login_raises_when_refresh_fails_without_email():
     )
     with pytest.raises(TgtgAPIError):
         client.login()
+
+
+@responses.activate
+def test_get_payment_methods():
+    _datadome_sdk()
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, "paymentMethod/v1/"),
+        json={"payment_methods": [{"payment_type": "VISA", "card_identifier": "1111"}]},
+        status=200,
+    )
+    client = TgtgClient(
+        email="test@example.com",
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+    result = client.get_payment_methods()
+    assert result["payment_methods"][0]["card_identifier"] == "1111"
+
+
+@responses.activate
+def test_get_payment_methods_for_item():
+    _datadome_sdk()
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, "paymentMethod/v1/item/123"),
+        json={"payment_methods": []},
+        status=200,
+    )
+    client = TgtgClient(
+        email="test@example.com",
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+    assert client.get_payment_methods("123") == {"payment_methods": []}
+
+
+@responses.activate
+def test_get_vouchers():
+    _datadome_sdk()
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, "voucher/v3/"),
+        json={"vouchers": []},
+        status=200,
+    )
+    client = TgtgClient(
+        email="test@example.com",
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+    assert client.get_vouchers() == {"vouchers": []}
+
+
+@responses.activate
+def test_pay_order_posts_to_v8():
+    _datadome_sdk()
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, "order/v8/o1/pay"),
+        json={"payment_id": "p1", "state": "PENDING"},
+        status=200,
+    )
+    client = TgtgClient(
+        email="test@example.com",
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+    result = client.pay_order("o1", {"authorization": {"payment_provider": "ADYEN"}})
+    assert result["payment_id"] == "p1"
+
+
+@responses.activate
+def test_pay_order_falls_back_to_v7_on_404():
+    _datadome_sdk()
+    responses.add(responses.POST, urljoin(BASE_URL, "order/v8/o1/pay"), status=404)
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, "order/v7/o1/pay"),
+        json={"payment_id": "p2", "state": "PENDING"},
+        status=200,
+    )
+    client = TgtgClient(
+        email="test@example.com",
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+    result = client.pay_order("o1", {})
+    assert result["payment_id"] == "p2"
+
+
+@responses.activate
+def test_pay_order_error_raises():
+    _datadome_sdk()
+    responses.add(responses.POST, urljoin(BASE_URL, "order/v8/o1/pay"), status=400, body="bad request")
+    responses.add(responses.POST, urljoin(BASE_URL, "order/v7/o1/pay"), status=400, body="bad request")
+    client = TgtgClient(
+        email="test@example.com",
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+    with pytest.raises(TgtgAPIError):
+        client.pay_order("o1", {})
+
+
+@responses.activate
+def test_get_payment_status():
+    _datadome_sdk()
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, "payment/v3/p1"),
+        json={"paymentId": "p1", "state": "PENDING"},
+        status=200,
+    )
+    client = TgtgClient(
+        email="test@example.com",
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+    assert client.get_payment_status("p1") == {"paymentId": "p1", "state": "PENDING"}

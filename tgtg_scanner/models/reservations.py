@@ -24,6 +24,41 @@ def is_sold_out_error(err: Exception) -> bool:
     return any(marker in msg for marker in SOLD_OUT_MARKERS)
 
 
+def _redact_secrets(payload):
+    """Recursively blank values of secret-ish keys before logging."""
+    if isinstance(payload, dict):
+        return {
+            key: "***" if key in ("secret", "authorization_payload") else _redact_secrets(value) for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [_redact_secrets(entry) for entry in payload]
+    return payload
+
+
+def _saved_card_payment(methods: dict | None) -> dict:
+    """Build the app-shaped saved-card pay body (no device secret available headlessly)."""
+    payment_type = "CREDITCARD"
+    if isinstance(methods, dict):
+        entries = methods.get("payment_methods") or methods.get("paymentMethods") or []
+        if isinstance(entries, list):
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get("payment_type"):
+                    payment_type = str(entry["payment_type"])
+                    break
+    return {
+        "authorization": {
+            "authorization_payload": {
+                "payload": "",
+                "payment_type": payment_type,
+                "save_payment_method": False,
+                "type": "adyenAuthorizationPayload",
+            },
+            "payment_provider": "ADYEN",
+            "return_url": "adyencheckout://com.app.tgtg.itemview",
+        }
+    }
+
+
 @dataclass
 class Order:
     id: str
@@ -68,8 +103,9 @@ RESERVATIONS_FILE = "reservations.json"
 
 
 class Reservations:
-    def __init__(self, client: TgtgClient, persist_dir: str | None = None) -> None:
+    def __init__(self, client: TgtgClient, persist_dir: str | None = None, pay_probe: bool = False) -> None:
         self.client = client
+        self.pay_probe = pay_probe
         self.reservation_query: list[Reservation] = []
         self.active_orders: dict[str, Order] = {}
         self._persist_path = Path(persist_dir) / RESERVATIONS_FILE if persist_dir else None
@@ -348,3 +384,39 @@ class Reservations:
             )
             self._save()
             log.info("Order created for %s (order_id=%s)", reservation.display_name, order_id)
+            if self.pay_probe:
+                self._probe_payment(order_id, reservation)
+
+    def _probe_payment(self, order_id: str, reservation: Reservation) -> None:
+        """PayProbe: explore TGTG payment endpoints against a fresh order. Never raises."""
+        log.info("PAYPROBE probing payment endpoints for order %s (%s)", order_id, reservation.display_name)
+        methods: dict | None = None
+        steps = (
+            ("payment_methods", lambda: self.client.get_payment_methods()),
+            ("payment_methods_item", lambda: self.client.get_payment_methods(reservation.item_id)),
+            ("vouchers", self.client.get_vouchers),
+        )
+        for name, fn in steps:
+            try:
+                result = fn()
+            except Exception as exc:
+                log.warning("PAYPROBE %s failed: %s", name, exc)
+                continue
+            log.info("PAYPROBE %s: %s", name, _redact_secrets(result))
+            if name == "payment_methods" and isinstance(result, dict):
+                methods = result
+        try:
+            result = self.client.pay_order(order_id, _saved_card_payment(methods))
+            log.info("PAYPROBE pay_order: %s", _redact_secrets(result))
+        except Exception as exc:
+            log.warning("PAYPROBE pay_order failed: %s", exc)
+            return
+        payment_id = None
+        if isinstance(result, dict):
+            payment_id = result.get("payment_id") or result.get("paymentId")
+        if payment_id:
+            try:
+                status = self.client.get_payment_status(str(payment_id))
+                log.info("PAYPROBE payment_status: %s", _redact_secrets(status))
+            except Exception as exc:
+                log.warning("PAYPROBE payment_status failed: %s", exc)
