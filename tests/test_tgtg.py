@@ -196,6 +196,8 @@ def test_get_payment_methods():
     client.login = lambda: None  # type: ignore[method-assign]
     result = client.get_payment_methods()
     assert result["payment_methods"][0]["card_identifier"] == "1111"
+    body = json.loads(responses.calls[1].request.body)
+    assert body["supportedTypes"] == ["CREDITCARD"]
 
 
 @responses.activate
@@ -224,6 +226,27 @@ def test_get_vouchers():
     responses.add(
         responses.POST,
         urljoin(BASE_URL, "voucher/v3/"),
+        json={"vouchers": []},
+        status=200,
+    )
+    client = TgtgClient(
+        email="test@example.com",
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+    assert client.get_vouchers() == {"vouchers": []}
+
+
+@responses.activate
+def test_get_vouchers_falls_back_on_404():
+    _datadome_sdk()
+    responses.add(responses.POST, urljoin(BASE_URL, "voucher/v3/"), status=404, body="nope")
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, "voucher/v4/"),
         json={"vouchers": []},
         status=200,
     )

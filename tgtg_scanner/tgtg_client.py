@@ -204,22 +204,29 @@ class TgtgClient(_UpstreamTgtgClient):
             "datadome_cookie": extract_datadome(self),
         }
 
-    def get_payment_methods(self, item_id: str | None = None) -> dict:
+    def get_payment_methods(self, item_id: str | None = None, supported_types: list[str] | None = None) -> dict:
         """List saved payment methods (account-level or item-specific)."""
         self.login()
         path = f"paymentMethod/v1/item/{item_id}" if item_id else "paymentMethod/v1/"
-        response = self._post(self._get_url(path), json={})
+        body = {"supportedTypes": supported_types if supported_types is not None else ["CREDITCARD"]}
+        response = self._post(self._get_url(path), json=body)
         if response.status_code != HTTPStatus.OK:
             raise TgtgAPIError(response.status_code, response.content)
         return response.json()
 
     def get_vouchers(self) -> dict:
-        """List vouchers / gift cards on the account."""
+        """List vouchers / gift cards on the account (version-probed: v3 removed since 2022)."""
         self.login()
-        response = self._post(self._get_url("voucher/v3/"), json={})
-        if response.status_code != HTTPStatus.OK:
+        last_error: TgtgAPIError | None = None
+        for path in ("voucher/v3/", "voucher/v4/", "voucher/v5/"):
+            response = self._post(self._get_url(path), json={})
+            if response.status_code == HTTPStatus.NOT_FOUND:
+                last_error = TgtgAPIError(response.status_code, response.content)
+                continue
+            if response.status_code == HTTPStatus.OK:
+                return response.json()
             raise TgtgAPIError(response.status_code, response.content)
-        return response.json()
+        raise last_error if last_error is not None else TgtgAPIError(404, b"no voucher endpoint")
 
     def pay_order(self, order_id: str, payment: dict) -> dict:
         """Post a payment authorization for an order (v8 endpoint, v7 fallback)."""

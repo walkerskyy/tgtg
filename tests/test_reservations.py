@@ -436,4 +436,6 @@ def test_pay_probe_runs_on_register_order():
     client.get_vouchers.assert_called_once()  # type: ignore[attr-defined]
     client.pay_order.assert_called_once()  # type: ignore[attr-defined]
     assert client.pay_order.call_args[0][0] == "o9"  # type: ignore[attr-defined]
+    body = client.pay_order.call_args[0][1]  # type: ignore[attr-defined]
+    assert "authorizations" in body and isinstance(body["authorizations"], list)
     client.get_payment_status.assert_called_once_with("p1")  # type: ignore[attr-defined]

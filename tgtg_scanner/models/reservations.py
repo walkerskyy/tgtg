@@ -46,16 +46,18 @@ def _saved_card_payment(methods: dict | None) -> dict:
                     payment_type = str(entry["payment_type"])
                     break
     return {
-        "authorization": {
-            "authorization_payload": {
-                "payload": "",
-                "payment_type": payment_type,
-                "save_payment_method": False,
-                "type": "adyenAuthorizationPayload",
-            },
-            "payment_provider": "ADYEN",
-            "return_url": "adyencheckout://com.app.tgtg.itemview",
-        }
+        "authorizations": [
+            {
+                "authorization_payload": {
+                    "payload": "",
+                    "payment_type": payment_type,
+                    "save_payment_method": False,
+                    "type": "adyenAuthorizationPayload",
+                },
+                "payment_provider": "ADYEN",
+                "return_url": "adyencheckout://com.app.tgtg.itemview",
+            }
+        ]
     }
 
 
