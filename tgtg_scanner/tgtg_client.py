@@ -41,7 +41,6 @@ DEFAULT_SUPPORTED_TYPES: list[dict] = [
             "VIPPS",
             "TWINT",
             "MBWAY",
-            "SWISH",
             "BLIK",
             "GOOGLEPAY",
         ],
@@ -255,6 +254,14 @@ class TgtgClient(_UpstreamTgtgClient):
         """Initialize the payment session for an order (APK 26.10.0: payment/v4/order/{orderId})."""
         self.login()
         response = self._post(self._get_url(f"payment/v4/order/{order_id}"))
+        if response.status_code != HTTPStatus.OK:
+            raise TgtgAPIError(response.status_code, response.content)
+        return response.json()
+
+    def payment_biometrics(self, payment_id: str) -> dict:
+        """Fetch saved-card auth material for a payment session (APK 26.10.0: payment/v4/{paymentId}/biometrics)."""
+        self.login()
+        response = self._post(self._get_url(f"payment/v4/{payment_id}/biometrics"))
         if response.status_code != HTTPStatus.OK:
             raise TgtgAPIError(response.status_code, response.content)
         return response.json()

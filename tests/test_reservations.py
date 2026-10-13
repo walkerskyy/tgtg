@@ -481,3 +481,40 @@ def test_pay_probe_retries_pay_once(mocker):
     r.register_order("o11", "123", 1, "Test Bag")
     assert client.pay_order.call_count == 2
     client.get_payment_status.assert_called_once_with("p2")  # type: ignore[attr-defined]
+
+
+def test_pay_probe_saved_card_token_when_item_methods_fail(tgtg_item: dict):
+    """Item methods 500 (bag already taken) must not block the saved-card token path."""
+    client = MagicMock()
+    saved = {
+        "consumer_saved_psp_payment_methods": [
+            {
+                "payment_type": "CREDITCARD",
+                "identifier": "TESTCARDIDENT01",
+                "display_value": "•••• 4242",
+                "status": "ACTIVE",
+                "brand": "VISA",
+                "payment_provider": "ADYEN",
+            }
+        ]
+    }
+    client.get_payment_methods.side_effect = [saved, RuntimeError("(500, ILLEGAL_STATE)")]
+    client.create_payment.return_value = {"payments": [{"payment_id": "p1"}]}
+    client.payment_biometrics.return_value = {
+        "biometrics_protected_secret": "sec",
+        "saved_payment_method_token": "tok",
+        "payment_id": "p1",
+    }
+    client.pay_order.return_value = {"payments": [{"payment_id": "p1"}]}
+    client.get_payment_status.return_value = {"state": "PENDING"}
+    r = Reservations(client, pay_probe=True)
+    r.register_order("o20", "123", 1, "Test Bag")
+    client.create_payment.assert_called_once_with("o20")  # type: ignore[attr-defined]
+    client.payment_biometrics.assert_called_once_with("p1")  # type: ignore[attr-defined]
+    client.pay_order.assert_called_once()  # type: ignore[attr-defined]
+    payload = client.pay_order.call_args[0][1]["authorizations"][0]["authorization_payload"]  # type: ignore[attr-defined]
+    assert payload["payment_method_token"] == "tok"
+    assert payload["biometrics_protected_secret"] == "sec"
+    assert payload["payment_type"] == "CREDITCARD"
+    assert payload["type"] == "adyenAuthorizationPayload"
+    client.get_payment_status.assert_called_once_with("p1")  # type: ignore[attr-defined]

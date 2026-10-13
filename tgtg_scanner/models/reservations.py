@@ -28,7 +28,10 @@ def _redact_secrets(payload):
     """Recursively blank values of secret-ish keys before logging."""
     if isinstance(payload, dict):
         return {
-            key: "***" if key in ("secret", "authorization_payload") else _redact_secrets(value) for key, value in payload.items()
+            key: "***"
+            if key in ("secret", "authorization_payload", "biometrics_protected_secret", "payment_method_token")
+            else _redact_secrets(value)
+            for key, value in payload.items()
         }
     if isinstance(payload, list):
         return [_redact_secrets(entry) for entry in payload]
@@ -62,6 +65,45 @@ def _authorization_body(method: dict) -> dict:
                     "type": "adyenAuthorizationPayload",
                 },
                 "payment_provider": str(method.get("payment_provider") or "ADYEN"),
+                "return_url": "adyencheckout://com.app.tgtg.itemview",
+            }
+        ]
+    }
+
+
+def _saved_card_from(response: object) -> dict | None:
+    """First ACTIVE saved card from a paymentMethod/v2 response."""
+    if not isinstance(response, dict):
+        return None
+    cards = response.get("consumer_saved_psp_payment_methods")
+    if not isinstance(cards, list):
+        return None
+    for card in cards:
+        if isinstance(card, dict) and card.get("identifier") and card.get("status") == "ACTIVE":
+            return card
+    return None
+
+
+def _saved_card_authorization(card: dict, biometrics: dict | None) -> dict:
+    """Pay with a saved card: server-side card identifier + tokens from payment/v4 biometrics."""
+    token = None
+    secret = None
+    if isinstance(biometrics, dict):
+        token = biometrics.get("saved_payment_method_token")
+        secret = biometrics.get("biometrics_protected_secret")
+    payload: dict = {
+        "payment_method_token": token or card.get("identifier"),
+        "payment_type": str(card.get("payment_type") or "CREDITCARD"),
+        "save_payment_method": False,
+        "type": "adyenAuthorizationPayload",
+    }
+    if secret:
+        payload["biometrics_protected_secret"] = secret
+    return {
+        "authorizations": [
+            {
+                "authorization_payload": payload,
+                "payment_provider": str(card.get("payment_provider") or "ADYEN"),
                 "return_url": "adyencheckout://com.app.tgtg.itemview",
             }
         ]
@@ -406,9 +448,11 @@ class Reservations:
     def _probe_payment(self, order_id: str, item_id: str, display_name: str) -> None:
         """PayProbe: walk the app's pay flow against a fresh order. Never raises."""
         log.info("PAYPROBE probing payment endpoints for order %s (%s)", order_id, display_name)
+        saved_card: dict | None = None
         try:
             saved = self.client.get_payment_methods()
             log.info("PAYPROBE saved_cards: %s", _redact_secrets(saved))
+            saved_card = _saved_card_from(saved)
         except Exception as exc:
             log.warning("PAYPROBE saved_cards failed: %s", exc)
         entries: list = []
@@ -420,10 +464,9 @@ class Reservations:
         except Exception as exc:
             log.warning("PAYPROBE payment_methods failed: %s", exc)
         chosen = _choose_payment_method(entries)
-        if chosen is None:
-            log.warning("PAYPROBE no payment method with an adyen payload; skipping pay")
+        if chosen is None and saved_card is None:
+            log.warning("PAYPROBE no payment method and no saved card; skipping pay")
             return
-        log.info("PAYPROBE chosen: %s", _redact_secrets(chosen))
         payment_id: str | None = None
         try:
             created = self.client.create_payment(order_id)
@@ -431,7 +474,19 @@ class Reservations:
             payment_id = _first_payment_id(created)
         except Exception as exc:
             log.warning("PAYPROBE create_payment failed: %s", exc)
-        body = _authorization_body(chosen)
+        biometrics: dict | None = None
+        if saved_card is not None and payment_id is not None:
+            try:
+                biometrics = self.client.payment_biometrics(payment_id)
+                log.info("PAYPROBE biometrics: %s", _redact_secrets(biometrics))
+            except Exception as exc:
+                log.warning("PAYPROBE biometrics failed: %s", exc)
+        if saved_card is not None:
+            body = _saved_card_authorization(saved_card, biometrics)
+            log.info("PAYPROBE auth: saved-card token (identifier=%s)", saved_card.get("identifier"))
+        else:
+            body = _authorization_body(chosen)  # type: ignore[arg-type]
+            log.info("PAYPROBE chosen: %s", _redact_secrets(chosen))
         try:
             result = self.client.pay_order(order_id, body)
         except Exception as exc:

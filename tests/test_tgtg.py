@@ -341,3 +341,24 @@ def test_create_payment_for_order():
     client.login = lambda: None  # type: ignore[method-assign]
     result = client.create_payment("o1")
     assert result["payments"][0]["payment_id"] == "p9"
+
+
+@responses.activate
+def test_payment_biometrics():
+    _datadome_sdk()
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, "payment/v4/p1/biometrics"),
+        json={"biometrics_protected_secret": "sec", "saved_payment_method_token": "tok", "payment_id": "p1"},
+        status=200,
+    )
+    client = TgtgClient(
+        email="test@example.com",
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+    result = client.payment_biometrics("p1")
+    assert result["saved_payment_method_token"] == "tok"
