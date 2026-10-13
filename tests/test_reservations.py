@@ -289,6 +289,26 @@ def test_process_terminal_state_removes_and_notifies(reservations: Reservations)
     assert "o1" not in reservations.active_orders
 
 
+def test_process_aborted_state_is_terminal(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="RESERVED", created_at=int(time.time()))
+    reservations.client.get_order_status.return_value = {"state": "ABORTED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert len(notified) == 1
+    assert notified[0].status == "ABORTED"
+    assert "o1" not in reservations.active_orders
+
+
+def test_process_order_entity_deleted_removes_as_deleted(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="RESERVED", created_at=int(time.time()))
+    reservations.client.get_order_status.side_effect = TgtgAPIError(410, b'{"errors":[{"code":"ENTITY_DELETED"}]}')  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert len(notified) == 1
+    assert notified[0].status == "DELETED"
+    assert "o1" not in reservations.active_orders
+    notified2 = reservations.process_active_orders()
+    assert notified2 == []
+
+
 def test_process_status_error_skips_order(reservations: Reservations):
     reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="RESERVED", created_at=int(time.time()))
     reservations.client.get_order_status.side_effect = RuntimeError("boom")  # type: ignore[attr-defined]

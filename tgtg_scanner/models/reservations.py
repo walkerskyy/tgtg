@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from tgtg_scanner.errors import TgtgAPIError
 from tgtg_scanner.models.item import Item
 from tgtg_scanner.models.schedule import Schedule
 from tgtg_scanner.tgtg_client import TgtgClient
@@ -14,7 +15,7 @@ log = logging.getLogger("tgtg")
 UNPAID_WARNING = "UNPAID_WARNING"
 PAYMENT_DEADLINE = 270  # seconds; TGTG reservation hold is ~5 minutes
 SOLD_OUT_MARKERS = ("sold out", "no longer available", "not available", "out of stock")
-TERMINAL_STATES = frozenset({"CANCELED", "EXPIRED", "REFUNDED"})
+TERMINAL_STATES = frozenset({"CANCELED", "EXPIRED", "REFUNDED", "ABORTED"})
 
 
 def is_sold_out_error(err: Exception) -> bool:
@@ -221,7 +222,8 @@ class Reservations:
 
         - CONFIRMED (paid): notify once, keep in ledger; prune when it leaves get_active().
         - RESERVED past PAYMENT_DEADLINE: set UNPAID_WARNING and notify once.
-        - Terminal state (CANCELED/EXPIRED/REFUNDED): notify and remove.
+        - Terminal state (CANCELED/EXPIRED/REFUNDED/ABORTED): notify and remove.
+        - Order entity gone (HTTP 410): notify as DELETED and remove.
         - Unknown non-empty state: log a warning, keep polling (never silently drop).
 
         Returns:
@@ -233,6 +235,16 @@ class Reservations:
         for order_id, order in list(self.active_orders.items()):
             try:
                 res = self.client.get_order_status(order_id)
+            except TgtgAPIError as exc:
+                if exc.args and exc.args[0] == 410:
+                    log.info("Order %s no longer exists (entity deleted) - removing from ledger", order_id)
+                    order.status = "DELETED"
+                    events.append(order)
+                    self.active_orders.pop(order_id, None)
+                    changed = True
+                    continue
+                log.warning("Failed to get status for order %s: %s", order_id, exc)
+                continue
             except Exception as exc:
                 log.warning("Failed to get status for order %s: %s", order_id, exc)
                 continue
