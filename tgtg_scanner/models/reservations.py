@@ -15,7 +15,7 @@ log = logging.getLogger("tgtg")
 UNPAID_WARNING = "UNPAID_WARNING"
 PAYMENT_DEADLINE = 270  # seconds; TGTG reservation hold is ~5 minutes
 SOLD_OUT_MARKERS = ("sold out", "no longer available", "not available", "out of stock")
-TERMINAL_STATES = frozenset({"CANCELED", "EXPIRED", "REFUNDED", "ABORTED"})
+TERMINAL_STATES = frozenset({"CANCELED", "CANCELLED", "EXPIRED", "REFUNDED", "ABORTED"})
 
 
 def is_sold_out_error(err: Exception) -> bool:
@@ -367,9 +367,11 @@ class Reservations:
     def process_active_orders(self) -> list[Order]:
         """Check every tracked order's status and report transitions.
 
-        - CONFIRMED (paid): notify once, keep in ledger; prune when it leaves get_active().
+        - PAID (payment settled) / CONFIRMED (collected): notify once, keep in ledger;
+          prune CONFIRMED when it leaves get_active().
+        - PAYMENT_INITIATED: in progress, update status silently.
         - RESERVED past PAYMENT_DEADLINE: set UNPAID_WARNING and notify once.
-        - Terminal state (CANCELED/EXPIRED/REFUNDED/ABORTED): notify and remove.
+        - Terminal state (CANCELED/CANCELLED/EXPIRED/REFUNDED/ABORTED): notify and remove.
         - Order entity gone (HTTP 410): notify as DELETED and remove.
         - Unknown non-empty state: log a warning, keep polling (never silently drop).
 
@@ -399,12 +401,20 @@ class Reservations:
             if not isinstance(state, str) or not state:
                 log.warning("Order %s: unexpected status payload %r - skipping", order_id, res)
                 continue
-            if state == "CONFIRMED":
-                if order.status != "CONFIRMED":
-                    order.status = "CONFIRMED"
+            if state in ("CONFIRMED", "PAID"):
+                if order.status != state:
+                    order.status = state
                     changed = True
                     events.append(order)
-                    log.info("Order %s CONFIRMED (purchased) for %s", order_id, order.display_name)
+                    if state == "PAID":
+                        log.info("Order %s PAID for %s", order_id, order.display_name)
+                    else:
+                        log.info("Order %s CONFIRMED (purchased) for %s", order_id, order.display_name)
+            elif state == "PAYMENT_INITIATED":
+                if order.status != state:
+                    order.status = state
+                    changed = True
+                    log.info("Order %s payment initiated for %s", order_id, order.display_name)
             elif state == "RESERVED":
                 if order.status == "RESERVED" and order.created_at and now - order.created_at >= PAYMENT_DEADLINE:
                     order.status = UNPAID_WARNING

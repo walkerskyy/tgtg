@@ -358,6 +358,47 @@ def test_telegram_survives_startup_timeout(
     assert not telegram.thread.is_alive()
 
 
+def _telegram_enabled_config() -> Config:
+    config = Config()
+    config.telegram.enabled = True
+    config.telegram.token = "1234567890:ABCDEF"
+    config.telegram.cron = Cron()
+    config.telegram.chat_ids = ["123456"]
+    config.telegram.disable_commands = False
+    config.telegram.body = "New Magic Bags: ${{items_available}}"
+    config.telegram.image = None
+    return config
+
+
+def test_telegram_startup_get_me_timeout_retries(
+    reservations: Reservations, favorites: Favorites, mocked_telegram: MockerFixture
+):
+    """A transient timeout on the startup get_me() check must not abort scanner startup."""
+    mocked_telegram.patch("tgtg_scanner.notifiers.telegram.sleep")
+    mocked_telegram.patch(
+        "telegram.Bot.get_me",
+        side_effect=[TimedOut("Timed out"), MagicMock(username="test_bot")],
+    )
+
+    config = _telegram_enabled_config()
+    telegram = Telegram(config, reservations, favorites)  # must not raise
+    assert telegram.enabled
+
+
+def test_telegram_startup_get_me_persistent_timeout_raises(
+    reservations: Reservations, favorites: Favorites, mocked_telegram: MockerFixture
+):
+    """After retries are exhausted a persistent Telegram failure is still a config error."""
+    from tgtg_scanner.errors import TelegramConfigurationError
+
+    mocked_telegram.patch("tgtg_scanner.notifiers.telegram.sleep")
+    mocked_telegram.patch("telegram.Bot.get_me", side_effect=TimedOut("Timed out"))
+
+    config = _telegram_enabled_config()
+    with pytest.raises(TelegramConfigurationError):
+        Telegram(config, reservations, favorites)
+
+
 @pytest.fixture
 def mocked_discord(mocker: MockerFixture):
     mocker.patch(

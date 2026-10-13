@@ -365,6 +365,47 @@ def test_unknown_state_kept_in_ledger(reservations: Reservations):
     assert reservations.active_orders["o1"].status == "RESERVED"
 
 
+def test_process_payment_initiated_updates_status_silently(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="RESERVED", created_at=int(time.time()))
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert notified == []  # no notification, just a status update
+    assert reservations.active_orders["o1"].status == "PAYMENT_INITIATED"
+    assert "o1" in reservations.active_orders
+
+
+def test_process_paid_notifies_once_and_keeps(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()))
+    reservations.client.get_order_status.return_value = {"state": "PAID"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert [o.id for o in notified] == ["o1"]
+    assert notified[0].status == "PAID"
+    assert "o1" in reservations.active_orders  # kept until collected/cancelled
+    # no repeat warning on subsequent polls
+    notified2 = reservations.process_active_orders()
+    assert notified2 == []
+    assert reservations.active_orders["o1"].status == "PAID"
+
+
+def test_process_paid_order_then_cancelled_removes(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="PAID", created_at=int(time.time()))
+    reservations.client.get_order_status.return_value = {"state": "CANCELLED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert [o.status for o in notified] == ["CANCELLED"]
+    assert "o1" not in reservations.active_orders
+
+
+def test_process_cancelled_double_l_is_terminal(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="PAID", created_at=int(time.time()))
+    reservations.client.get_order_status.return_value = {"state": "CANCELLED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert len(notified) == 1
+    assert "o1" not in reservations.active_orders
+    # no repeat warnings after removal
+    notified2 = reservations.process_active_orders()
+    assert notified2 == []
+
+
 def test_make_orders_sold_out_calls_callback(reservations: Reservations, tgtg_item: dict):
     callback_mock = MagicMock()
     sold_out_mock = MagicMock()

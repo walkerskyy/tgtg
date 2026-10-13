@@ -207,7 +207,7 @@ class Scanner:
             if self.drop_history.in_predicted_window(reservation.item_id, now):
                 return True
         for order in self.reservations.active_orders.values():
-            if order.status in ("RESERVED", UNPAID_WARNING):
+            if order.status in ("RESERVED", UNPAID_WARNING, "PAYMENT_INITIATED"):
                 return True
         return False
 

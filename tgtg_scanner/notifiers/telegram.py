@@ -95,11 +95,26 @@ class Telegram(Notifier):
                 asyncio.set_event_loop(loop)
                 application = ApplicationBuilder().token(self.token).arbitrary_callback_data(True).build()
                 application.add_error_handler(self._error)
-                asyncio.run(application.bot.get_me())
+                self._verify_bot(application)
             except InvalidToken as err:
                 raise TelegramConfigurationError("Invalid Telegram Bot Token") from err
             except TelegramError as err:
                 raise TelegramConfigurationError(err.message) from err
+
+    @staticmethod
+    def _verify_bot(application: Application) -> None:
+        """Call get_me() with retries so transient network timeouts don't abort scanner startup."""
+        last_err: TelegramError | None = None
+        for attempt in range(3):
+            try:
+                asyncio.run(application.bot.get_me())
+                return
+            except TelegramError as err:
+                last_err = err
+                if attempt < 2:
+                    sleep(0.5 * (attempt + 1))
+        assert last_err is not None
+        raise last_err
 
     @property
     def _handlers(self):

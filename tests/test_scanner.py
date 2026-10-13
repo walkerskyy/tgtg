@@ -229,6 +229,14 @@ def test_fast_mode_when_unpaid_order_pending(scanner: Scanner, mocker: MockerFix
     assert scanner._fast_mode_active()
 
 
+def test_fast_mode_when_payment_initiated(scanner: Scanner, mocker: MockerFixture):
+    from tgtg_scanner.models.reservations import Order
+
+    mocker.patch.object(scanner.drop_history, "in_predicted_window", return_value=False)
+    scanner.reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=1)
+    assert scanner._fast_mode_active()
+
+
 def test_fast_mode_off_without_queue_or_orders(scanner: Scanner, mocker: MockerFixture):
     mocker.patch.object(scanner.drop_history, "in_predicted_window", return_value=False)
     assert not scanner._fast_mode_active()
