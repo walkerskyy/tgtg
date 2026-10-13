@@ -861,6 +861,19 @@ def test_payment_failure_exhausts_budget_and_alerts_once(reservations: Reservati
     assert events2 == []
 
 
+def test_payment_failure_rearms_slow_retry_after_alert(reservations: Reservations):
+    order = _retry_order(pay_attempts=3, pay_alerted=True, pay_retry_at=None)
+    reservations.active_orders["o1"] = order
+    events: list[Order] = []
+    before = int(time.time())
+    changed = reservations._handle_payment_failure(order, "o1", events, "retry attempt 3 failed", PAYMENT_FAILED)
+    assert changed is True
+    assert order.status == PAYMENT_FAILED
+    assert events == []
+    assert order.pay_retry_at is not None
+    assert 50 <= order.pay_retry_at - before <= 61
+
+
 def test_payment_failure_ignored_while_retry_scheduled(reservations: Reservations):
     order = _retry_order(status=PAYMENT_RETRY_PENDING, pay_retry_at=int(time.time()) + 100)
     reservations.active_orders["o1"] = order
