@@ -35,30 +35,52 @@ def _redact_secrets(payload):
     return payload
 
 
-def _saved_card_payment(methods: dict | None) -> dict:
-    """Build the app-shaped saved-card pay body (no device secret available headlessly)."""
-    payment_type = "CREDITCARD"
-    if isinstance(methods, dict):
-        entries = methods.get("payment_methods") or methods.get("paymentMethods") or []
-        if isinstance(entries, list):
-            for entry in entries:
-                if isinstance(entry, dict) and entry.get("payment_type"):
-                    payment_type = str(entry["payment_type"])
-                    break
+def _choose_payment_method(entries: list) -> dict | None:
+    """Prefer a saved/recurring card, then CREDITCARD, then any entry carrying an Adyen payload."""
+
+    def has_payload(entry: dict) -> bool:
+        return isinstance(entry, dict) and bool(entry.get("adyen_api_payload"))
+
+    recurring = [entry for entry in entries if has_payload(entry) and entry.get("recurring_info")]
+    cards = [entry for entry in entries if has_payload(entry) and entry.get("payment_type") == "CREDITCARD"]
+    with_payload = [entry for entry in entries if has_payload(entry)]
+    for candidate in (recurring, cards, with_payload):
+        if candidate:
+            return candidate[0]
+    return None
+
+
+def _authorization_body(method: dict) -> dict:
+    """Build the app-shaped pay body from a payment_methods entry (payload straight from TGTG)."""
     return {
         "authorizations": [
             {
                 "authorization_payload": {
-                    "payload": "",
-                    "payment_type": payment_type,
+                    "payload": method.get("adyen_api_payload") or "",
+                    "payment_type": str(method.get("payment_type") or "CREDITCARD"),
                     "save_payment_method": False,
                     "type": "adyenAuthorizationPayload",
                 },
-                "payment_provider": "ADYEN",
+                "payment_provider": str(method.get("payment_provider") or "ADYEN"),
                 "return_url": "adyencheckout://com.app.tgtg.itemview",
             }
         ]
     }
+
+
+def _first_payment_id(result: object) -> str | None:
+    """Extract payment_id from a PaymentResponse ({payments: [...]}) or a flat payment dict."""
+    if not isinstance(result, dict):
+        return None
+    direct = result.get("payment_id") or result.get("paymentId")
+    if direct:
+        return str(direct)
+    payments = result.get("payments")
+    if isinstance(payments, list) and payments and isinstance(payments[0], dict):
+        pid = payments[0].get("payment_id") or payments[0].get("paymentId")
+        if pid:
+            return str(pid)
+    return None
 
 
 @dataclass
@@ -382,35 +404,49 @@ class Reservations:
             log.info("Order created for %s (order_id=%s)", reservation.display_name, order_id)
 
     def _probe_payment(self, order_id: str, item_id: str, display_name: str) -> None:
-        """PayProbe: explore TGTG payment endpoints against a fresh order. Never raises."""
+        """PayProbe: walk the app's pay flow against a fresh order. Never raises."""
         log.info("PAYPROBE probing payment endpoints for order %s (%s)", order_id, display_name)
-        methods: dict | None = None
-        steps = (
-            ("payment_methods", lambda: self.client.get_payment_methods()),
-            ("payment_methods_item", lambda: self.client.get_payment_methods(item_id)),
-            ("vouchers", self.client.get_vouchers),
-        )
-        for name, fn in steps:
-            try:
-                result = fn()
-            except Exception as exc:
-                log.warning("PAYPROBE %s failed: %s", name, exc)
-                continue
-            log.info("PAYPROBE %s: %s", name, _redact_secrets(result))
-            if name == "payment_methods" and isinstance(result, dict):
-                methods = result
         try:
-            result = self.client.pay_order(order_id, _saved_card_payment(methods))
-            log.info("PAYPROBE pay_order: %s", _redact_secrets(result))
+            saved = self.client.get_payment_methods()
+            log.info("PAYPROBE saved_cards: %s", _redact_secrets(saved))
         except Exception as exc:
-            log.warning("PAYPROBE pay_order failed: %s", exc)
+            log.warning("PAYPROBE saved_cards failed: %s", exc)
+        entries: list = []
+        try:
+            methods = self.client.get_payment_methods(item_id=item_id)
+            log.info("PAYPROBE payment_methods: %s", _redact_secrets(methods))
+            if isinstance(methods, dict):
+                entries = [entry for entry in methods.get("payment_methods") or [] if isinstance(entry, dict)]
+        except Exception as exc:
+            log.warning("PAYPROBE payment_methods failed: %s", exc)
+        chosen = _choose_payment_method(entries)
+        if chosen is None:
+            log.warning("PAYPROBE no payment method with an adyen payload; skipping pay")
             return
-        payment_id = None
-        if isinstance(result, dict):
-            payment_id = result.get("payment_id") or result.get("paymentId")
+        log.info("PAYPROBE chosen: %s", _redact_secrets(chosen))
+        payment_id: str | None = None
+        try:
+            created = self.client.create_payment(order_id)
+            log.info("PAYPROBE create_payment: %s", _redact_secrets(created))
+            payment_id = _first_payment_id(created)
+        except Exception as exc:
+            log.warning("PAYPROBE create_payment failed: %s", exc)
+        body = _authorization_body(chosen)
+        try:
+            result = self.client.pay_order(order_id, body)
+        except Exception as exc:
+            log.warning("PAYPROBE pay_order failed (%s); retrying once after 2s", exc)
+            time.sleep(2)
+            try:
+                result = self.client.pay_order(order_id, body)
+            except Exception as retry_exc:
+                log.warning("PAYPROBE pay_order retry failed: %s", retry_exc)
+                return
+        log.info("PAYPROBE pay_order: %s", _redact_secrets(result))
+        payment_id = _first_payment_id(result) or payment_id
         if payment_id:
             try:
-                status = self.client.get_payment_status(str(payment_id))
+                status = self.client.get_payment_status(payment_id)
                 log.info("PAYPROBE payment_status: %s", _redact_secrets(status))
             except Exception as exc:
                 log.warning("PAYPROBE payment_status failed: %s", exc)

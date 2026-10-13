@@ -182,8 +182,8 @@ def test_get_payment_methods():
     _datadome_sdk()
     responses.add(
         responses.POST,
-        urljoin(BASE_URL, "paymentMethod/v1/"),
-        json={"payment_methods": [{"payment_type": "VISA", "card_identifier": "1111"}]},
+        urljoin(BASE_URL, "paymentMethod/v2"),
+        json={"consumer_saved_psp_payment_methods": [{"identifier": "1111", "display_value": "•••• 4444"}]},
         status=200,
     )
     client = TgtgClient(
@@ -195,9 +195,8 @@ def test_get_payment_methods():
     )
     client.login = lambda: None  # type: ignore[method-assign]
     result = client.get_payment_methods()
-    assert result["payment_methods"][0]["card_identifier"] == "1111"
-    body = json.loads(responses.calls[1].request.body)
-    assert body["supportedTypes"] == ["CREDITCARD"]
+    assert result["consumer_saved_psp_payment_methods"][0]["identifier"] == "1111"
+    assert responses.calls[1].request.body in (None, "", b"")
 
 
 @responses.activate
@@ -205,7 +204,7 @@ def test_get_payment_methods_for_item():
     _datadome_sdk()
     responses.add(
         responses.POST,
-        urljoin(BASE_URL, "paymentMethod/v1/item/123"),
+        urljoin(BASE_URL, "paymentMethod/v2/item/123"),
         json={"payment_methods": []},
         status=200,
     )
@@ -218,6 +217,9 @@ def test_get_payment_methods_for_item():
     )
     client.login = lambda: None  # type: ignore[method-assign]
     assert client.get_payment_methods("123") == {"payment_methods": []}
+    body = json.loads(responses.calls[1].request.body)
+    assert body["supported_types"][0]["provider"] == "ADYEN"
+    assert "CREDITCARD" in body["supported_types"][0]["payment_types"]
 
 
 @responses.activate
@@ -225,28 +227,7 @@ def test_get_vouchers():
     _datadome_sdk()
     responses.add(
         responses.POST,
-        urljoin(BASE_URL, "voucher/v3/"),
-        json={"vouchers": []},
-        status=200,
-    )
-    client = TgtgClient(
-        email="test@example.com",
-        access_token="at",
-        refresh_token="rt",
-        cookie=normalize_cookie("dd"),
-        user_agent="TGTG/test",
-    )
-    client.login = lambda: None  # type: ignore[method-assign]
-    assert client.get_vouchers() == {"vouchers": []}
-
-
-@responses.activate
-def test_get_vouchers_falls_back_on_404():
-    _datadome_sdk()
-    responses.add(responses.POST, urljoin(BASE_URL, "voucher/v3/"), status=404, body="nope")
-    responses.add(
-        responses.POST,
-        urljoin(BASE_URL, "voucher/v4/"),
+        urljoin(BASE_URL, "voucher/v4/active"),
         json={"vouchers": []},
         status=200,
     )
@@ -326,8 +307,8 @@ def test_get_payment_status():
     _datadome_sdk()
     responses.add(
         responses.POST,
-        urljoin(BASE_URL, "payment/v3/p1"),
-        json={"paymentId": "p1", "state": "PENDING"},
+        urljoin(BASE_URL, "payment/v4/p1"),
+        json={"payment_id": "p1", "state": "PENDING"},
         status=200,
     )
     client = TgtgClient(
@@ -338,4 +319,25 @@ def test_get_payment_status():
         user_agent="TGTG/test",
     )
     client.login = lambda: None  # type: ignore[method-assign]
-    assert client.get_payment_status("p1") == {"paymentId": "p1", "state": "PENDING"}
+    assert client.get_payment_status("p1") == {"payment_id": "p1", "state": "PENDING"}
+
+
+@responses.activate
+def test_create_payment_for_order():
+    _datadome_sdk()
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, "payment/v4/order/o1"),
+        json={"payments": [{"payment_id": "p9", "state": "CREATED"}]},
+        status=200,
+    )
+    client = TgtgClient(
+        email="test@example.com",
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+    result = client.create_payment("o1")
+    assert result["payments"][0]["payment_id"] == "p9"

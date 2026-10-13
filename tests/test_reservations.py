@@ -394,8 +394,13 @@ def test_pay_probe_disabled_by_default(reservations: Reservations, tgtg_item: di
 def test_pay_probe_runs_after_order_created(tgtg_item: dict):
     client = MagicMock()
     client.create_order.return_value = {"id": "o1"}
-    client.get_payment_methods.return_value = {"payment_methods": []}
-    client.get_vouchers.return_value = {"vouchers": []}
+    client.get_payment_methods.return_value = {
+        "payment_methods_state": "SUCCESS",
+        "payment_methods": [
+            {"payment_type": "PAYPAL", "payment_provider": "ADYEN", "adyen_api_payload": '{"type":"paypal"}'},
+        ],
+    }
+    client.create_payment.return_value = {"payments": [{"payment_id": "p1"}]}
     client.pay_order.return_value = {"payment_id": "p1"}
     client.get_payment_status.return_value = {"state": "PENDING"}
     r = Reservations(client, pay_probe=True)
@@ -403,9 +408,12 @@ def test_pay_probe_runs_after_order_created(tgtg_item: dict):
     r.make_orders({"123": Item(tgtg_item)}, MagicMock())
     assert "o1" in r.active_orders
     assert len(r.reservation_query) == 0
-    client.get_vouchers.assert_called_once()  # type: ignore[attr-defined]
+    client.get_payment_methods.assert_any_call(item_id="123")  # type: ignore[attr-defined]
+    client.create_payment.assert_called_once_with("o1")  # type: ignore[attr-defined]
     client.pay_order.assert_called_once()  # type: ignore[attr-defined]
     assert client.pay_order.call_args[0][0] == "o1"  # type: ignore[attr-defined]
+    body = client.pay_order.call_args[0][1]  # type: ignore[attr-defined]
+    assert body["authorizations"][0]["authorization_payload"]["payload"] == '{"type":"paypal"}'
     client.get_payment_status.assert_called_once_with("p1")  # type: ignore[attr-defined]
 
 
@@ -419,6 +427,7 @@ def test_pay_probe_failure_does_not_break_reservation(tgtg_item: dict):
     r.reserve("123", "Test Item")
     callback_mock = MagicMock()
     r.make_orders({"123": Item(tgtg_item)}, callback_mock)
+    client.create_payment.assert_not_called()  # type: ignore[attr-defined]
     assert "o2" in r.active_orders
     assert len(r.reservation_query) == 0
     callback_mock.assert_called_once()
@@ -427,15 +436,48 @@ def test_pay_probe_failure_does_not_break_reservation(tgtg_item: dict):
 def test_pay_probe_runs_on_register_order():
     """register_order is the shared hook for every reserve path (scanner + queue)."""
     client = MagicMock()
-    client.get_payment_methods.return_value = {"payment_methods": []}
-    client.get_vouchers.return_value = {"vouchers": []}
+    client.get_payment_methods.return_value = {
+        "payment_methods_state": "SUCCESS",
+        "payment_methods": [
+            {"payment_type": "PAYPAL", "payment_provider": "ADYEN", "adyen_api_payload": '{"type":"paypal"}'},
+            {"payment_type": "CREDITCARD", "payment_provider": "ADYEN", "adyen_api_payload": '{"type":"cardcfg"}'},
+        ],
+    }
+    client.create_payment.return_value = {"payments": [{"payment_id": "p1"}]}
     client.pay_order.return_value = {"payment_id": "p1"}
     client.get_payment_status.return_value = {"state": "PENDING"}
     r = Reservations(client, pay_probe=True)
     r.register_order("o9", "123", 1, "Test Bag")
-    client.get_vouchers.assert_called_once()  # type: ignore[attr-defined]
+    client.create_payment.assert_called_once_with("o9")  # type: ignore[attr-defined]
     client.pay_order.assert_called_once()  # type: ignore[attr-defined]
     assert client.pay_order.call_args[0][0] == "o9"  # type: ignore[attr-defined]
     body = client.pay_order.call_args[0][1]  # type: ignore[attr-defined]
     assert "authorizations" in body and isinstance(body["authorizations"], list)
+    payload = body["authorizations"][0]["authorization_payload"]
+    assert payload["payment_type"] == "CREDITCARD"
+    assert payload["payload"] == '{"type":"cardcfg"}'
     client.get_payment_status.assert_called_once_with("p1")  # type: ignore[attr-defined]
+
+
+def test_pay_probe_skips_pay_without_adyen_payload():
+    client = MagicMock()
+    client.get_payment_methods.return_value = {"payment_methods": []}
+    r = Reservations(client, pay_probe=True)
+    r.register_order("o10", "123", 1, "Test Bag")
+    client.create_payment.assert_not_called()  # type: ignore[attr-defined]
+    client.pay_order.assert_not_called()  # type: ignore[attr-defined]
+
+
+def test_pay_probe_retries_pay_once(mocker):
+    client = MagicMock()
+    client.get_payment_methods.return_value = {
+        "payment_methods": [{"payment_type": "CREDITCARD", "payment_provider": "ADYEN", "adyen_api_payload": "{}"}],
+    }
+    client.create_payment.return_value = {"payments": [{"payment_id": "p2"}]}
+    client.pay_order.side_effect = [RuntimeError("too fast"), {"payment_id": "p2"}]
+    client.get_payment_status.return_value = {"state": "PENDING"}
+    mocker.patch("time.sleep")
+    r = Reservations(client, pay_probe=True)
+    r.register_order("o11", "123", 1, "Test Bag")
+    assert client.pay_order.call_count == 2
+    client.get_payment_status.assert_called_once_with("p2")  # type: ignore[attr-defined]

@@ -24,3 +24,8 @@ compose.yml
 accessToken
 refreshToken
 datadome
+
+# runtime state
+reservations.json
+drop_history.json
+scanner.log

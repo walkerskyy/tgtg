@@ -27,6 +27,31 @@ log = logging.getLogger("tgtg")
 
 _DATADOME_RE = re.compile(r"datadome=([^;]+)", re.IGNORECASE)
 
+# App-shaped supported payment methods (decompiled from APK 26.10.0, matches PaymentType enum).
+DEFAULT_SUPPORTED_TYPES: list[dict] = [
+    {
+        "provider": "ADYEN",
+        "payment_types": [
+            "CREDITCARD",
+            "SOFORT",
+            "IDEAL",
+            "PAYPAL",
+            "BCMCMOBILE",
+            "BCMCCARD",
+            "VIPPS",
+            "TWINT",
+            "MBWAY",
+            "SWISH",
+            "BLIK",
+            "GOOGLEPAY",
+        ],
+    },
+    {"provider": "VOUCHER", "payment_types": ["VOUCHER", "FAKE_DOOR"]},
+    {"provider": "BRAINTREE", "payment_types": ["VENMO"]},
+    {"provider": "CHARITY", "payment_types": ["CHARITY"]},
+    {"provider": "SATISPAY", "payment_types": ["SATISPAY"]},
+]
+
 
 def normalize_cookie(value: str | None) -> str | None:
     """Map config Datadome (raw token or Cookie header) to upstream cookie."""
@@ -204,29 +229,35 @@ class TgtgClient(_UpstreamTgtgClient):
             "datadome_cookie": extract_datadome(self),
         }
 
-    def get_payment_methods(self, item_id: str | None = None, supported_types: list[str] | None = None) -> dict:
-        """List saved payment methods (account-level or item-specific)."""
+    def get_payment_methods(self, item_id: str | None = None, supported_types: list[dict] | None = None) -> dict:
+        """List saved payment methods (global) or payable methods for an item (APK 26.10.0: paymentMethod/v2)."""
         self.login()
-        path = f"paymentMethod/v1/item/{item_id}" if item_id else "paymentMethod/v1/"
-        body = {"supportedTypes": supported_types if supported_types is not None else ["CREDITCARD"]}
+        if item_id:
+            path = f"paymentMethod/v2/item/{item_id}"
+            body: dict | None = {"supported_types": supported_types if supported_types is not None else DEFAULT_SUPPORTED_TYPES}
+        else:
+            path = "paymentMethod/v2"
+            body = None
         response = self._post(self._get_url(path), json=body)
         if response.status_code != HTTPStatus.OK:
             raise TgtgAPIError(response.status_code, response.content)
         return response.json()
 
     def get_vouchers(self) -> dict:
-        """List vouchers / gift cards on the account (version-probed: v3 removed since 2022)."""
+        """List active vouchers (APK 26.10.0: voucher/v4/active)."""
         self.login()
-        last_error: TgtgAPIError | None = None
-        for path in ("voucher/v3/", "voucher/v4/", "voucher/v5/"):
-            response = self._post(self._get_url(path), json={})
-            if response.status_code == HTTPStatus.NOT_FOUND:
-                last_error = TgtgAPIError(response.status_code, response.content)
-                continue
-            if response.status_code == HTTPStatus.OK:
-                return response.json()
+        response = self._post(self._get_url("voucher/v4/active"))
+        if response.status_code != HTTPStatus.OK:
             raise TgtgAPIError(response.status_code, response.content)
-        raise last_error if last_error is not None else TgtgAPIError(404, b"no voucher endpoint")
+        return response.json()
+
+    def create_payment(self, order_id: str) -> dict:
+        """Initialize the payment session for an order (APK 26.10.0: payment/v4/order/{orderId})."""
+        self.login()
+        response = self._post(self._get_url(f"payment/v4/order/{order_id}"))
+        if response.status_code != HTTPStatus.OK:
+            raise TgtgAPIError(response.status_code, response.content)
+        return response.json()
 
     def pay_order(self, order_id: str, payment: dict) -> dict:
         """Post a payment authorization for an order (v8 endpoint, v7 fallback)."""
@@ -243,9 +274,9 @@ class TgtgClient(_UpstreamTgtgClient):
         raise last_error if last_error is not None else TgtgAPIError(404, b"no pay endpoint")
 
     def get_payment_status(self, payment_id: str) -> dict:
-        """Poll payment state for a payment started via pay_order."""
+        """Poll payment state for a payment started via pay_order (APK 26.10.0: payment/v4)."""
         self.login()
-        response = self._post(self._get_url(f"payment/v3/{payment_id}"))
+        response = self._post(self._get_url(f"payment/v4/{payment_id}"))
         if response.status_code != HTTPStatus.OK:
             raise TgtgAPIError(response.status_code, response.content)
         return response.json()
