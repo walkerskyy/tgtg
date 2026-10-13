@@ -362,3 +362,23 @@ def test_payment_biometrics():
     client.login = lambda: None  # type: ignore[method-assign]
     result = client.payment_biometrics("p1")
     assert result["saved_payment_method_token"] == "tok"
+
+
+@responses.activate
+def test_get_order_status():
+    _datadome_sdk()
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, "order/v8/o1/status"),
+        json={"state": "PAYMENT_PENDING"},
+        status=200,
+    )
+    client = TgtgClient(
+        email="test@example.com",
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+    assert client.get_order_status("o1") == {"state": "PAYMENT_PENDING"}

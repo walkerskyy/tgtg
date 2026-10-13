@@ -249,6 +249,7 @@ class Scanner:
             return
         amount = reservation.amount or 1
         log.info("Reserving %d bag(s) for %s", amount, item.display_name)
+        self.reservations.prefetch_probe_methods(item.item_id)
         try:
             if self.tgtg_client.session:
                 self.tgtg_client.session.last_api_request = None

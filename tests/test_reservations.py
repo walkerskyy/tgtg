@@ -518,3 +518,32 @@ def test_pay_probe_saved_card_token_when_item_methods_fail(tgtg_item: dict):
     assert payload["payment_type"] == "CREDITCARD"
     assert payload["type"] == "adyenAuthorizationPayload"
     client.get_payment_status.assert_called_once_with("p1")  # type: ignore[attr-defined]
+
+
+def test_prefetched_methods_used_by_probe_without_refetch():
+    """Item methods must be fetched BEFORE the order exists; probe must use the cache."""
+    client = MagicMock()
+    client.get_payment_methods.return_value = {
+        "payment_methods_state": "SUCCESS",
+        "payment_methods": [
+            {"payment_type": "CREDITCARD", "payment_provider": "ADYEN", "adyen_api_payload": '{"type":"cardcfg"}'},
+        ],
+    }
+    client.create_payment.return_value = {"payments": [{"payment_id": "p1"}]}
+    client.pay_order.return_value = {"payments": [{"payment_id": "p1"}]}
+    client.get_payment_status.return_value = {"state": "PENDING"}
+    r = Reservations(client, pay_probe=True)
+    r.prefetch_probe_methods("123")
+    r.register_order("o30", "123", 1, "Test Bag")
+    # exactly one item-scoped fetch (prefetch); the other call is the saved-cards lookup
+    assert client.get_payment_methods.call_count == 2  # type: ignore[attr-defined]
+    assert client.get_payment_methods.call_args_list[0].kwargs == {"item_id": "123"}  # type: ignore[attr-defined]
+    body = client.pay_order.call_args[0][1]  # type: ignore[attr-defined]
+    assert body["authorizations"][0]["authorization_payload"]["payload"] == '{"type":"cardcfg"}'
+
+
+def test_prefetch_disabled_without_pay_probe():
+    client = MagicMock()
+    r = Reservations(client, pay_probe=False)
+    r.prefetch_probe_methods("123")
+    client.get_payment_methods.assert_not_called()  # type: ignore[attr-defined]

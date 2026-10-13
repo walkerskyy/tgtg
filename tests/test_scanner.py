@@ -277,3 +277,14 @@ def test_fast_job_favorites_and_one_non_favorite(scanner: Scanner, tgtg_item: di
     assert mock_get_item.call_count == 2
     assert mock_order_events.call_count == 2  # spec §4: order events every cycle, fast or normal
     assert mock_make_orders.call_count == 2  # already-available queued items still get bought
+
+
+def test_attempt_reservation_prefetches_probe_methods(scanner: Scanner, test_item: Item, mocker: MockerFixture):
+    scanner.reservations.reserve(test_item.item_id, test_item.display_name)
+    scanner.reservations.pay_probe = True
+    mock_prefetch = mocker.patch.object(scanner.reservations, "prefetch_probe_methods")
+    mocker.patch.object(scanner.tgtg_client, "create_order", return_value={"id": "ord_1"})
+
+    scanner._attempt_reservation(test_item)
+
+    mock_prefetch.assert_called_once_with(test_item.item_id)

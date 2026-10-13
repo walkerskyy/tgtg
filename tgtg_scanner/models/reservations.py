@@ -174,6 +174,7 @@ class Reservations:
         self.pay_probe = pay_probe
         self.reservation_query: list[Reservation] = []
         self.active_orders: dict[str, Order] = {}
+        self._probe_methods: dict[str, dict] = {}
         self._persist_path = Path(persist_dir) / RESERVATIONS_FILE if persist_dir else None
         self._load()
 
@@ -436,6 +437,7 @@ class Reservations:
         return cancelled, skipped
 
     def _create_order(self, reservation: Reservation) -> None:
+        self.prefetch_probe_methods(reservation.item_id)
         if self.client.session:
             self.client.session.last_api_request = None
         log.info("Creating order for %s (qty=%d)", reservation.display_name, reservation.amount)
@@ -444,6 +446,18 @@ class Reservations:
         if order_id:
             self.register_order(order_id, reservation.item_id, reservation.amount, reservation.display_name)
             log.info("Order created for %s (order_id=%s)", reservation.display_name, order_id)
+
+    def prefetch_probe_methods(self, item_id: str) -> None:
+        """PayProbe: fetch item payment methods BEFORE the order exists (server requires a pre-order fetch)."""
+        if not self.pay_probe or item_id in self._probe_methods:
+            return
+        try:
+            methods = self.client.get_payment_methods(item_id=item_id)
+            log.info("PAYPROBE pre-reserve payment_methods: %s", _redact_secrets(methods))
+            if isinstance(methods, dict):
+                self._probe_methods[item_id] = methods
+        except Exception as exc:
+            log.warning("PAYPROBE pre-reserve payment_methods failed: %s", exc)
 
     def _probe_payment(self, order_id: str, item_id: str, display_name: str) -> None:
         """PayProbe: walk the app's pay flow against a fresh order. Never raises."""
@@ -456,13 +470,18 @@ class Reservations:
         except Exception as exc:
             log.warning("PAYPROBE saved_cards failed: %s", exc)
         entries: list = []
-        try:
-            methods = self.client.get_payment_methods(item_id=item_id)
-            log.info("PAYPROBE payment_methods: %s", _redact_secrets(methods))
-            if isinstance(methods, dict):
-                entries = [entry for entry in methods.get("payment_methods") or [] if isinstance(entry, dict)]
-        except Exception as exc:
-            log.warning("PAYPROBE payment_methods failed: %s", exc)
+        cached = self._probe_methods.get(item_id)
+        if cached is not None:
+            log.info("PAYPROBE payment_methods (pre-reserve cache): %s", _redact_secrets(cached))
+            entries = [entry for entry in cached.get("payment_methods") or [] if isinstance(entry, dict)]
+        else:
+            try:
+                methods = self.client.get_payment_methods(item_id=item_id)
+                log.info("PAYPROBE payment_methods: %s", _redact_secrets(methods))
+                if isinstance(methods, dict):
+                    entries = [entry for entry in methods.get("payment_methods") or [] if isinstance(entry, dict)]
+            except Exception as exc:
+                log.warning("PAYPROBE payment_methods failed: %s", exc)
         chosen = _choose_payment_method(entries)
         if chosen is None and saved_card is None:
             log.warning("PAYPROBE no payment method and no saved card; skipping pay")
@@ -487,16 +506,22 @@ class Reservations:
         else:
             body = _authorization_body(chosen)  # type: ignore[arg-type]
             log.info("PAYPROBE chosen: %s", _redact_secrets(chosen))
-        try:
-            result = self.client.pay_order(order_id, body)
-        except Exception as exc:
-            log.warning("PAYPROBE pay_order failed (%s); retrying once after 2s", exc)
-            time.sleep(2)
+        self._log_order_status(order_id)
+        result = None
+        last_exc: Exception | None = None
+        for attempt in range(3):
             try:
                 result = self.client.pay_order(order_id, body)
-            except Exception as retry_exc:
-                log.warning("PAYPROBE pay_order retry failed: %s", retry_exc)
-                return
+                break
+            except Exception as exc:
+                last_exc = exc
+                log.warning("PAYPROBE pay_order attempt %d failed (%s)", attempt + 1, exc)
+                self._log_order_status(order_id)
+                if attempt < 2:
+                    time.sleep(2 + 2 * attempt)
+        if result is None:
+            log.warning("PAYPROBE pay_order failed after retries: %s", last_exc)
+            return
         log.info("PAYPROBE pay_order: %s", _redact_secrets(result))
         payment_id = _first_payment_id(result) or payment_id
         if payment_id:
@@ -505,3 +530,12 @@ class Reservations:
                 log.info("PAYPROBE payment_status: %s", _redact_secrets(status))
             except Exception as exc:
                 log.warning("PAYPROBE payment_status failed: %s", exc)
+
+    def _log_order_status(self, order_id: str) -> None:
+        try:
+            state = self.client.get_order_status(order_id)
+        except Exception as exc:
+            log.warning("PAYPROBE order_status failed: %s", exc)
+            return
+        if isinstance(state, (dict, list)):
+            log.info("PAYPROBE order_status: %s", _redact_secrets(state))
