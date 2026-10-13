@@ -626,8 +626,8 @@ class Reservations:
         except Exception as exc:
             log.warning("PAYPROBE pre-reserve payment_methods failed: %s", exc)
 
-    def _probe_payment(self, order_id: str, item_id: str, display_name: str) -> None:
-        """PayProbe: walk the app's pay flow against a fresh order. Never raises."""
+    def _probe_payment(self, order_id: str, item_id: str, display_name: str) -> bool:
+        """Walk the app's pay flow against a fresh order. Never raises. Returns True when pay_order succeeded."""
         log.info("PAYPROBE probing payment endpoints for order %s (%s)", order_id, display_name)
         price: dict | None = None
         order = self.active_orders.get(order_id)
@@ -667,7 +667,7 @@ class Reservations:
         chosen = _choose_payment_method(entries)
         if chosen is None and saved_card is None:
             log.warning("PAYPROBE no payment method and no saved card; skipping pay")
-            return
+            return False
         payment_id: str | None = None
         try:
             created = self.client.create_payment(order_id)
@@ -706,7 +706,7 @@ class Reservations:
                     time.sleep(2 + 2 * attempt)
         if result is None:
             log.warning("PAYPROBE pay_order failed after retries: %s", last_exc)
-            return
+            return False
         log.info("PAYPROBE pay_order: %s", _redact_secrets(result))
         payment_id = _first_payment_id(result) or payment_id
         if payment_id:
@@ -715,6 +715,7 @@ class Reservations:
                 tracked.payment_id = payment_id
                 self._save()
             self._poll_payment_status(order_id, payment_id)
+        return True
 
     def _poll_payment_status(self, order_id: str, payment_id: str) -> None:
         """Poll the fresh payment until it leaves the in-flight states or we time out."""

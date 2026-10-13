@@ -741,6 +741,24 @@ def test_probe_stops_polling_on_payment_failure(tgtg_item: dict, mocker: MockerF
     assert r.active_orders["o1"].payment_id == "p1"  # kept so the watcher can keep tracking
 
 
+def test_probe_payment_returns_bool(mocker: MockerFixture):
+    mocker.patch("time.sleep")
+    client = _probe_client()
+    r = Reservations(client)
+    r.active_orders["o1"] = Order(
+        "o1",
+        "123",
+        1,
+        "Test",
+        status="RESERVED",
+        created_at=int(time.time()),
+        price={"total_price": {"minor": 500, "code": "EUR"}},
+    )
+    assert r._probe_payment("o1", "123", "Test") is True
+    client.pay_order.side_effect = RuntimeError("declined")
+    assert r._probe_payment("o1", "123", "Test") is False
+
+
 def test_process_payment_failure_first_signal_is_silent(reservations: Reservations):
     order = Order("o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1")
     reservations.active_orders["o1"] = order
