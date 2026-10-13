@@ -982,3 +982,110 @@ def test_payment_failure_ignored_for_paid_order(reservations: Reservations):
     assert reservations._handle_payment_failure(order, "o1", events, "late signal", PAYMENT_FAILED) is False
     assert order.status == "PAID"
     assert events == []
+
+
+def _due_order(**kwargs) -> Order:
+    defaults: dict = dict(
+        id="o1",
+        item_id="123",
+        amount=1,
+        display_name="T",
+        status=PAYMENT_RETRY_PENDING,
+        created_at=int(time.time()),
+        payment_id="p1",
+        pay_retry_at=int(time.time()) - 1,
+    )
+    defaults.update(kwargs)
+    return Order(**defaults)
+
+
+def test_retry_executor_runs_when_due_and_pay_succeeds(reservations: Reservations, mocker: MockerFixture):
+    order = _due_order()
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "FAILED"}  # type: ignore[attr-defined]
+    probe = mocker.patch.object(reservations, "_probe_payment", return_value=True)
+    notified = reservations.process_active_orders()
+    probe.assert_called_once_with("o1", "123", "T")
+    assert order.pay_attempts == 1
+    assert order.status == "PAYMENT_INITIATED"
+    assert order.pay_retry_at is None
+    assert notified == []
+
+
+def test_retry_executor_skips_when_not_due(reservations: Reservations, mocker: MockerFixture):
+    order = _due_order(pay_retry_at=int(time.time()) + 300)
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "FAILED"}  # type: ignore[attr-defined]
+    probe = mocker.patch.object(reservations, "_probe_payment", return_value=True)
+    reservations.process_active_orders()
+    probe.assert_not_called()
+    assert order.pay_attempts == 0
+
+
+def test_retry_executor_cancels_timer_when_order_paid(reservations: Reservations, mocker: MockerFixture):
+    order = _due_order(status="PAYMENT_RETRY_PENDING")
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "PAID"}  # type: ignore[attr-defined]
+    probe = mocker.patch.object(reservations, "_probe_payment", return_value=True)
+    notified = reservations.process_active_orders()
+    probe.assert_not_called()
+    assert order.pay_retry_at is None
+    assert [o.status for o in notified] == ["PAID"]
+
+
+def test_retry_executor_skips_terminal_order(reservations: Reservations, mocker: MockerFixture):
+    order = _due_order()
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "EXPIRED"}  # type: ignore[attr-defined]
+    probe = mocker.patch.object(reservations, "_probe_payment", return_value=True)
+    notified = reservations.process_active_orders()
+    probe.assert_not_called()
+    assert "o1" not in reservations.active_orders
+    assert [o.status for o in notified] == ["EXPIRED"]
+
+
+def test_retry_executor_does_not_repay_settled_payment(reservations: Reservations, mocker: MockerFixture):
+    order = _due_order()
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "AUTHORIZED"}  # type: ignore[attr-defined]
+    probe = mocker.patch.object(reservations, "_probe_payment", return_value=True)
+    reservations.process_active_orders()
+    probe.assert_not_called()
+    assert order.status == "PAYMENT_INITIATED"
+    assert order.pay_retry_at is None
+
+
+def test_retry_executor_failure_reschedules_silently(reservations: Reservations, mocker: MockerFixture):
+    order = _due_order(pay_attempts=0)
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "FAILED"}  # type: ignore[attr-defined]
+    mocker.patch.object(reservations, "_probe_payment", return_value=False)
+    before = int(time.time())
+    notified = reservations.process_active_orders()
+    assert notified == []
+    assert order.pay_attempts == 1
+    assert order.status == PAYMENT_RETRY_PENDING
+    assert order.pay_retry_at is not None
+    assert 30 <= order.pay_retry_at - before <= 45
+
+
+def test_retry_executor_alerts_once_when_budget_exhausted(reservations: Reservations, mocker: MockerFixture):
+    order = _due_order(pay_attempts=2, pay_alerted=False, pay_retry_at=int(time.time()) - 1)
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "FAILED"}  # type: ignore[attr-defined]
+    mocker.patch.object(reservations, "_probe_payment", return_value=False)
+    notified = reservations.process_active_orders()
+    assert [o.status for o in notified] == [PAYMENT_FAILED]
+    assert order.pay_alerted is True
+    assert order.status == PAYMENT_FAILED
+    assert order.pay_retry_at is not None
+    order.pay_retry_at = int(time.time()) - 1  # due again next cycle
+    notified2 = reservations.process_active_orders()
+    assert notified2 == []
+    assert "o1" in reservations.active_orders  # ledger keeps the order while retrying
+    assert order.pay_retry_at is not None  # slow retry still armed

@@ -429,8 +429,9 @@ class Reservations:
         - PAID (payment settled) / CONFIRMED (collected): notify once, keep in ledger;
           prune CONFIRMED when it leaves get_active().
         - PAYMENT_INITIATED: in progress, update status silently; failed/stuck payments
-          become PAYMENT_FAILED and notify (order reverts to RESERVED, stuck past
-          PAYMENT_DEADLINE, or payment endpoint reports a failure/3DS-required state).
+          schedule automatic retries via _handle_payment_failure (silent for the first
+          two attempts, then a one-shot PAYMENT_FAILED/PAYMENT_ACTION_REQUIRED alert
+          with slow retries continuing); due retries re-run the probe pay flow.
         - RESERVED past PAYMENT_DEADLINE: set UNPAID_WARNING and notify once.
         - Terminal state (CANCELED/CANCELLED/EXPIRED/REFUNDED/ABORTED): notify and remove.
         - Order entity gone (HTTP 410): notify as DELETED and remove.
@@ -514,6 +515,8 @@ class Reservations:
             ):
                 if self._check_payment(order, order_id, events):
                     changed = True
+            if self._run_due_retry(order, order_id, state, now, events):
+                changed = True
         if any(o.status == "CONFIRMED" for o in self.active_orders.values()):
             if self._prune_collected_orders():
                 changed = True
@@ -548,6 +551,41 @@ class Reservations:
                 reason += f", failure_reason={failure_reason}"
             return self._handle_payment_failure(order, order_id, events, reason, PAYMENT_ACTION_REQUIRED)
         return False
+
+    def _run_due_retry(self, order: Order, order_id: str, state: str, now: int, events: list[Order]) -> bool:
+        """Execute a due payment retry via the probe flow. Never raises. Returns True when state changed."""
+        if order.pay_retry_at is None or now < order.pay_retry_at:
+            return False
+        if state in ("PAID", "CONFIRMED"):
+            order.pay_retry_at = None
+            log.info("PAYRETRY order %s already %s - cancelling retry", order_id, state)
+            return True
+        if state in TERMINAL_STATES:
+            return False
+        order.pay_retry_at = None
+        if order.payment_id:
+            try:
+                res = self.client.get_payment_status(order.payment_id)
+                pstate = res.get("state") if isinstance(res, dict) else None
+                if pstate in PAYMENT_SETTLED_STATES:
+                    order.status = "PAYMENT_INITIATED"
+                    log.info("PAYRETRY payment for order %s already settled (%s) - not re-paying", order_id, pstate)
+                    return True
+            except Exception as exc:
+                log.warning("PAYRETRY payment status check failed for order %s: %s", order_id, exc)
+        order.pay_attempts += 1
+        log.info("PAYRETRY attempt %d for order %s (%s)", order.pay_attempts, order_id, order.display_name)
+        if self._probe_payment(order_id, order.item_id, order.display_name):
+            order.status = "PAYMENT_INITIATED"
+            log.info("PAYRETRY pay accepted for order %s - watching for PAID", order_id)
+            return True
+        return self._handle_payment_failure(
+            order,
+            order_id,
+            events,
+            f"retry attempt {order.pay_attempts} failed",
+            PAYMENT_FAILED,
+        )
 
     def _prune_collected_orders(self) -> bool:
         """Drop CONFIRMED orders that no longer appear in get_active(). Returns True when changed."""
