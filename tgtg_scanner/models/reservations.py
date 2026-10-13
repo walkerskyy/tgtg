@@ -527,7 +527,7 @@ class Reservations:
         return events
 
     def _check_payment(self, order: Order, order_id: str, events: list[Order]) -> bool:
-        """Poll the payment endpoint; on failure/3DS-required set status and notify. Returns True when changed."""
+        """Poll the payment endpoint; route failures/3DS-required into retry scheduling. Returns True when changed."""
         payment_id = order.payment_id
         if not payment_id:
             return False
@@ -538,25 +538,20 @@ class Reservations:
             return False
         pstate = res.get("state", "") if isinstance(res, dict) else ""
         if pstate in PAYMENT_FAILURE_STATES:
-            order.status = PAYMENT_FAILED
-            events.append(order)
-            log.warning(
-                "Payment for order %s failed (%s) for %s - reservation still held; open the TGTG app to pay now",
-                order_id,
-                pstate,
-                order.display_name,
-            )
-            return True
+            failure_reason = res.get("failure_reason") if isinstance(res, dict) else None
+            payload = res.get("payload") if isinstance(res, dict) else None
+            reason = f"payment state {pstate}"
+            if failure_reason is not None:
+                reason += f", failure_reason={failure_reason}"
+            if payload is not None:
+                reason += f", payload={payload}"
+            return self._handle_payment_failure(order, order_id, events, reason, PAYMENT_FAILED)
         if pstate in PAYMENT_ACTION_STATES:
-            order.status = PAYMENT_ACTION_REQUIRED
-            events.append(order)
-            log.warning(
-                "Payment for order %s requires verification (%s) for %s - open the TGTG app to approve it",
-                order_id,
-                pstate,
-                order.display_name,
-            )
-            return True
+            failure_reason = res.get("failure_reason") if isinstance(res, dict) else None
+            reason = f"payment state {pstate}"
+            if failure_reason is not None:
+                reason += f", failure_reason={failure_reason}"
+            return self._handle_payment_failure(order, order_id, events, reason, PAYMENT_ACTION_REQUIRED)
         return False
 
     def _prune_collected_orders(self) -> bool:
@@ -738,16 +733,26 @@ class Reservations:
                 log.warning("PAYPROBE payment_status failed: %s", exc)
                 return
             if state in PAYMENT_FAILURE_STATES:
+                reason = status.get("failure_reason") if isinstance(status, dict) else None
+                payload = status.get("payload") if isinstance(status, dict) else None
                 log.warning(
-                    "PAYPROBE payment %s failed for order %s (state=%s) - watching order status", payment_id, order_id, state
-                )
-                return
-            if state in PAYMENT_ACTION_STATES:
-                log.warning(
-                    "PAYPROBE payment %s needs verification for order %s (state=%s) - open the TGTG app to approve it",
+                    "PAYPROBE payment %s failed for order %s (state=%s, failure_reason=%s, payload=%s) - watching order status",
                     payment_id,
                     order_id,
                     state,
+                    reason,
+                    payload,
+                )
+                return
+            if state in PAYMENT_ACTION_STATES:
+                reason = status.get("failure_reason") if isinstance(status, dict) else None
+                log.warning(
+                    "PAYPROBE payment %s needs verification for order %s (state=%s, failure_reason=%s) "
+                    "- open the TGTG app to approve it",
+                    payment_id,
+                    order_id,
+                    state,
+                    reason,
                 )
                 return
             if state in PAYMENT_SETTLED_STATES:

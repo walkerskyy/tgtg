@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -740,28 +741,65 @@ def test_probe_stops_polling_on_payment_failure(tgtg_item: dict, mocker: MockerF
     assert r.active_orders["o1"].payment_id == "p1"  # kept so the watcher can keep tracking
 
 
-def test_process_payment_failed_notifies_once(reservations: Reservations):
-    reservations.active_orders["o1"] = Order(
-        "o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1"
-    )
+def test_process_payment_failure_first_signal_is_silent(reservations: Reservations):
+    order = Order("o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1")
+    reservations.active_orders["o1"] = order
     reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
     reservations.client.get_payment_status.return_value = {"state": "FAILED"}  # type: ignore[attr-defined]
     notified = reservations.process_active_orders()
-    assert [o.status for o in notified] == [PAYMENT_FAILED]
+    assert notified == []
+    assert order.status == PAYMENT_RETRY_PENDING
+    assert order.pay_retry_at is not None
     assert "o1" in reservations.active_orders  # reservation still held until expiry
-    notified2 = reservations.process_active_orders()
-    assert notified2 == []
 
 
-def test_process_payment_action_required_notifies(reservations: Reservations):
-    reservations.active_orders["o1"] = Order(
-        "o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1"
+def test_process_payment_action_required_first_signal_is_silent(reservations: Reservations):
+    order = Order("o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1")
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "REAUTHORIZATION_REQUIRED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert notified == []
+    assert order.status == PAYMENT_RETRY_PENDING
+    assert order.pay_retry_at is not None
+
+
+def test_process_payment_action_required_alerts_after_fast_budget(reservations: Reservations):
+    order = Order(
+        "o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1", pay_attempts=2
     )
+    reservations.active_orders["o1"] = order
     reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
     reservations.client.get_payment_status.return_value = {"state": "REAUTHORIZATION_REQUIRED"}  # type: ignore[attr-defined]
     notified = reservations.process_active_orders()
     assert [o.status for o in notified] == [PAYMENT_ACTION_REQUIRED]
-    assert "o1" in reservations.active_orders
+    assert order.pay_alerted is True
+    assert order.pay_retry_at is not None
+
+
+def test_check_payment_logs_failure_reason(reservations: Reservations, caplog):
+    order = Order("o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1")
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {  # type: ignore[attr-defined]
+        "state": "FAILED",
+        "failure_reason": "risk_declined",
+        "payload": {"reason": "risk_declined"},
+    }
+    with caplog.at_level(logging.WARNING):
+        reservations.process_active_orders()
+    assert any("risk_declined" in record.getMessage() for record in caplog.records)
+
+
+def test_probe_payment_status_logs_failure_reason(tgtg_item: dict, mocker: MockerFixture, caplog):
+    mocker.patch("time.sleep")
+    client = _probe_client()
+    client.get_payment_status.side_effect = [{"state": "FAILED", "failure_reason": "risk_declined", "payload": {"av": "manual"}}]
+    r = Reservations(client)
+    r.reserve("123", "Test Item")
+    with caplog.at_level(logging.WARNING):
+        r.make_orders({"123": Item(tgtg_item)}, MagicMock())
+    assert any("risk_declined" in record.getMessage() for record in caplog.records)
 
 
 def test_process_in_flight_payment_stays_silent(reservations: Reservations):
