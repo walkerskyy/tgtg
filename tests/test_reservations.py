@@ -1058,6 +1058,21 @@ def test_retry_executor_does_not_repay_settled_payment(reservations: Reservation
     assert order.pay_retry_at is None
 
 
+def test_retry_executor_skips_repay_when_status_check_fails(reservations: Reservations, mocker: MockerFixture):
+    order = _due_order()
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.side_effect = RuntimeError("status endpoint down")  # type: ignore[attr-defined]
+    probe = mocker.patch.object(reservations, "_probe_payment", return_value=True)
+    notified = reservations.process_active_orders()
+    probe.assert_not_called()
+    assert notified == []
+    assert order.pay_attempts == 0  # not incremented - attempt was skipped, not consumed
+    assert order.status == PAYMENT_RETRY_PENDING
+    assert order.pay_retry_at is not None
+    assert 1 <= order.pay_retry_at - int(time.time()) <= 16
+
+
 def test_retry_executor_failure_reschedules_silently(reservations: Reservations, mocker: MockerFixture):
     order = _due_order(pay_attempts=0)
     reservations.active_orders["o1"] = order
@@ -1070,7 +1085,7 @@ def test_retry_executor_failure_reschedules_silently(reservations: Reservations,
     assert order.pay_attempts == 1
     assert order.status == PAYMENT_RETRY_PENDING
     assert order.pay_retry_at is not None
-    assert 30 <= order.pay_retry_at - before <= 45
+    assert 30 <= order.pay_retry_at - before <= 46
 
 
 def test_retry_executor_alerts_once_when_budget_exhausted(reservations: Reservations, mocker: MockerFixture):

@@ -572,7 +572,13 @@ class Reservations:
                     log.info("PAYRETRY payment for order %s already settled (%s) - not re-paying", order_id, pstate)
                     return True
             except Exception as exc:
-                log.warning("PAYRETRY payment status check failed for order %s: %s", order_id, exc)
+                order.pay_retry_at = now + 15
+                log.warning(
+                    "PAYRETRY payment status check failed for order %s: %s - skipping this attempt, retrying in 15s",
+                    order_id,
+                    exc,
+                )
+                return True
         order.pay_attempts += 1
         log.info("PAYRETRY attempt %d for order %s (%s)", order.pay_attempts, order_id, order.display_name)
         if self._probe_payment(order_id, order.item_id, order.display_name):
