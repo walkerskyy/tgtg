@@ -19,7 +19,14 @@ from tgtg_scanner.models import (
     Reservations,
 )
 from tgtg_scanner.models.drop_history import DropHistory
-from tgtg_scanner.models.reservations import PAYMENT_ACTION_REQUIRED, PAYMENT_FAILED, UNPAID_WARNING, Order, is_sold_out_error
+from tgtg_scanner.models.reservations import (
+    PAYMENT_ACTION_REQUIRED,
+    PAYMENT_FAILED,
+    PAYMENT_RETRY_PENDING,
+    UNPAID_WARNING,
+    Order,
+    is_sold_out_error,
+)
 from tgtg_scanner.models.reservations import Reservation as ReservationObj
 from tgtg_scanner.models.stock_monitor import StockMonitor
 from tgtg_scanner.notifiers import Notifiers
@@ -211,7 +218,14 @@ class Scanner:
             if self.drop_history.in_predicted_window(reservation.item_id, now):
                 return True
         for order in self.reservations.active_orders.values():
-            if order.status in ("RESERVED", UNPAID_WARNING, "PAYMENT_INITIATED", PAYMENT_FAILED, PAYMENT_ACTION_REQUIRED):
+            if order.status in (
+                "RESERVED",
+                UNPAID_WARNING,
+                "PAYMENT_INITIATED",
+                PAYMENT_FAILED,
+                PAYMENT_ACTION_REQUIRED,
+                PAYMENT_RETRY_PENDING,
+            ):
                 return True
         return False
 

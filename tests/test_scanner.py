@@ -335,3 +335,13 @@ def test_fast_mode_when_payment_failed(scanner: Scanner, mocker: MockerFixture):
     mocker.patch.object(scanner.drop_history, "in_predicted_window", return_value=False)
     scanner.reservations.active_orders["o1"] = Order("o1", "123", 1, "T", status=PAYMENT_FAILED, created_at=1, payment_id="p1")
     assert scanner._fast_mode_active()
+
+
+def test_fast_mode_when_payment_retry_pending(scanner: Scanner, mocker: MockerFixture):
+    from tgtg_scanner.models.reservations import PAYMENT_RETRY_PENDING, Order
+
+    mocker.patch.object(scanner.drop_history, "in_predicted_window", return_value=False)
+    scanner.reservations.active_orders["o1"] = Order(
+        "o1", "123", 1, "T", status=PAYMENT_RETRY_PENDING, created_at=1, payment_id="p1"
+    )
+    assert scanner._fast_mode_active()
