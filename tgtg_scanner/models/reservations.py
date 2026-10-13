@@ -172,6 +172,8 @@ class Reservations:
             order_id, item_id, amount, display_name, status="RESERVED", created_at=int(time.time())
         )
         self._save()
+        if self.pay_probe:
+            self._probe_payment(order_id, item_id, display_name)
 
     def reserve(self, item_id: str, display_name: str, amount: int = 1) -> None:
         """Create a new reservation.
@@ -374,26 +376,16 @@ class Reservations:
         res = self.client.create_order(reservation.item_id, reservation.amount)
         order_id = res.get("id")
         if order_id:
-            self.active_orders[order_id] = Order(
-                order_id,
-                reservation.item_id,
-                reservation.amount,
-                reservation.display_name,
-                status="RESERVED",
-                created_at=int(time.time()),
-            )
-            self._save()
+            self.register_order(order_id, reservation.item_id, reservation.amount, reservation.display_name)
             log.info("Order created for %s (order_id=%s)", reservation.display_name, order_id)
-            if self.pay_probe:
-                self._probe_payment(order_id, reservation)
 
-    def _probe_payment(self, order_id: str, reservation: Reservation) -> None:
+    def _probe_payment(self, order_id: str, item_id: str, display_name: str) -> None:
         """PayProbe: explore TGTG payment endpoints against a fresh order. Never raises."""
-        log.info("PAYPROBE probing payment endpoints for order %s (%s)", order_id, reservation.display_name)
+        log.info("PAYPROBE probing payment endpoints for order %s (%s)", order_id, display_name)
         methods: dict | None = None
         steps = (
             ("payment_methods", lambda: self.client.get_payment_methods()),
-            ("payment_methods_item", lambda: self.client.get_payment_methods(reservation.item_id)),
+            ("payment_methods_item", lambda: self.client.get_payment_methods(item_id)),
             ("vouchers", self.client.get_vouchers),
         )
         for name, fn in steps:

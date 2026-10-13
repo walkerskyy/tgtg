@@ -422,3 +422,18 @@ def test_pay_probe_failure_does_not_break_reservation(tgtg_item: dict):
     assert "o2" in r.active_orders
     assert len(r.reservation_query) == 0
     callback_mock.assert_called_once()
+
+
+def test_pay_probe_runs_on_register_order():
+    """register_order is the shared hook for every reserve path (scanner + queue)."""
+    client = MagicMock()
+    client.get_payment_methods.return_value = {"payment_methods": []}
+    client.get_vouchers.return_value = {"vouchers": []}
+    client.pay_order.return_value = {"payment_id": "p1"}
+    client.get_payment_status.return_value = {"state": "PENDING"}
+    r = Reservations(client, pay_probe=True)
+    r.register_order("o9", "123", 1, "Test Bag")
+    client.get_vouchers.assert_called_once()  # type: ignore[attr-defined]
+    client.pay_order.assert_called_once()  # type: ignore[attr-defined]
+    assert client.pay_order.call_args[0][0] == "o9"  # type: ignore[attr-defined]
+    client.get_payment_status.assert_called_once_with("p1")  # type: ignore[attr-defined]
