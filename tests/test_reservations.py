@@ -830,26 +830,43 @@ def test_process_in_flight_payment_stays_silent(reservations: Reservations):
     assert reservations.active_orders["o1"].status == "PAYMENT_INITIATED"
 
 
-def test_process_order_reverts_to_reserved_marks_payment_failed(reservations: Reservations):
-    reservations.active_orders["o1"] = Order(
-        "o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1"
-    )
+def test_process_order_reverts_to_reserved_schedules_silent_retry(reservations: Reservations):
+    order = Order("o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1")
+    reservations.active_orders["o1"] = order
     reservations.client.get_order_status.return_value = {"state": "RESERVED"}  # type: ignore[attr-defined]
     reservations.client.get_payment_status.return_value = {"state": "AUTHORIZATION_INITIATED"}  # type: ignore[attr-defined]
     notified = reservations.process_active_orders()
-    assert [o.status for o in notified] == [PAYMENT_FAILED]
+    assert notified == []
+    assert order.status == PAYMENT_RETRY_PENDING
+    assert order.pay_retry_at is not None
     assert "o1" in reservations.active_orders
     notified2 = reservations.process_active_orders()
     assert notified2 == []
 
 
-def test_process_payment_initiated_past_deadline_fails(reservations: Reservations):
-    old = int(time.time()) - 300
-    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=old, payment_id="p1")
-    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+def test_process_order_revert_alerts_after_fast_budget(reservations: Reservations):
+    order = Order(
+        "o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1", pay_attempts=2
+    )
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "RESERVED"}  # type: ignore[attr-defined]
     reservations.client.get_payment_status.return_value = {"state": "AUTHORIZATION_INITIATED"}  # type: ignore[attr-defined]
     notified = reservations.process_active_orders()
     assert [o.status for o in notified] == [PAYMENT_FAILED]
+    assert order.pay_alerted is True
+    assert order.pay_retry_at is not None
+
+
+def test_process_payment_initiated_past_deadline_schedules_retry(reservations: Reservations):
+    old = int(time.time()) - 300
+    order = Order("o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=old, payment_id="p1")
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "AUTHORIZATION_INITIATED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert notified == []
+    assert order.status == PAYMENT_RETRY_PENDING
+    assert order.pay_retry_at is not None
 
 
 def test_paid_order_does_not_poll_payment(reservations: Reservations):

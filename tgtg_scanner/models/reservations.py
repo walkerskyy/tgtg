@@ -481,25 +481,18 @@ class Reservations:
                     changed = True
                     log.info("Order %s payment initiated for %s", order_id, order.display_name)
                 elif order.created_at and now - order.created_at >= PAYMENT_DEADLINE:
-                    order.status = PAYMENT_FAILED
-                    changed = True
-                    events.append(order)
-                    log.warning(
-                        "Order %s payment still not complete for %s - marking as failed; open the TGTG app now",
+                    if self._handle_payment_failure(
+                        order,
                         order_id,
-                        order.display_name,
-                    )
+                        events,
+                        f"payment deadline ({PAYMENT_DEADLINE}s) exceeded",
+                        PAYMENT_FAILED,
+                    ):
+                        changed = True
             elif state == "RESERVED":
-                if order.status == "PAYMENT_INITIATED":
-                    order.status = PAYMENT_FAILED
-                    changed = True
-                    events.append(order)
-                    log.warning(
-                        "Order %s payment did not complete (back to RESERVED) for %s - open the TGTG app to pay "
-                        "before the hold expires",
-                        order_id,
-                        order.display_name,
-                    )
+                if order.status in ("PAYMENT_INITIATED", PAYMENT_RETRY_PENDING):
+                    if self._handle_payment_failure(order, order_id, events, "order reverted to RESERVED", PAYMENT_FAILED):
+                        changed = True
                 elif order.status == "RESERVED" and order.created_at and now - order.created_at >= PAYMENT_DEADLINE:
                     order.status = UNPAID_WARNING
                     changed = True
