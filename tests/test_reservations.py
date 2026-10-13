@@ -1,3 +1,4 @@
+import json
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -6,7 +7,7 @@ import pytest
 
 from tgtg_scanner.errors import TgtgAPIError
 from tgtg_scanner.models.item import Item
-from tgtg_scanner.models.reservations import UNPAID_WARNING, Order, Reservation, Reservations
+from tgtg_scanner.models.reservations import UNPAID_WARNING, Order, Reservation, Reservations, _extract_price
 from tgtg_scanner.models.schedule import Schedule
 
 
@@ -468,6 +469,49 @@ def test_pay_probe_skips_pay_without_adyen_payload():
     client.pay_order.assert_not_called()  # type: ignore[attr-defined]
 
 
+def test_extract_price_from_order_line():
+    price = {"currency": "AUD", "decimals": 2, "minor_units": 850}
+    assert _extract_price({"order_line": {"total_price": price}}) == price
+    assert _extract_price({"order_line": [{"total_price": price}]}) == price
+    assert _extract_price({"total_price": price}) == price
+    assert _extract_price({"order_line": None}) is None
+    assert _extract_price({}) is None
+
+
+def test_create_order_price_from_order_line(tgtg_item: dict):
+    price = {"currency": "AUD", "decimals": 2, "minor_units": 850}
+    client = MagicMock()
+    client.create_order.return_value = {"id": "o31", "order_line": {"total_price": price}}
+    r = Reservations(client, pay_probe=False)
+    r.reserve("123", "Test Item")
+    r.make_orders({"123": Item(tgtg_item)}, MagicMock())
+    assert r.active_orders["o31"].price == price
+
+
+def test_probe_fetches_order_detail_when_create_lacks_price(tgtg_item: dict):
+    """create_order omits totals; fall back to order/v8/{id} before paying."""
+    price = {"currency": "AUD", "decimals": 2, "minor_units": 850}
+    client = MagicMock()
+    client.create_order.return_value = {"id": "o32", "order_line": None}
+    client.get_order_detail.return_value = {"total_price": price}
+    client.get_payment_methods.return_value = {
+        "payment_methods_state": "SUCCESS",
+        "payment_methods": [
+            {"payment_type": "CREDITCARD", "payment_provider": "ADYEN", "adyen_api_payload": '{"type":"cardcfg"}'},
+        ],
+    }
+    client.create_payment.return_value = {"payments": []}
+    client.pay_order.return_value = {"payments": []}
+    client.get_payment_status.return_value = {"state": "PENDING"}
+    r = Reservations(client, pay_probe=True)
+    r.reserve("123", "Test Item")
+    r.make_orders({"123": Item(tgtg_item)}, MagicMock())
+    client.get_order_detail.assert_called_once_with("o32")  # type: ignore[attr-defined]
+    assert r.active_orders["o32"].price == price
+    body = client.pay_order.call_args[0][1]  # type: ignore[attr-defined]
+    assert body["authorizations"][0]["amount"] == price
+
+
 def test_create_order_stores_total_price_and_pay_includes_amount(tgtg_item: dict):
     """Authorization.amount must carry the order's total_price (app always passes Price)."""
     client = MagicMock()
@@ -539,7 +583,12 @@ def test_pay_probe_saved_card_token_when_item_methods_fail(tgtg_item: dict):
     body = client.pay_order.call_args[0][1]  # type: ignore[attr-defined]
     assert body["authorizations"][0]["amount"] == price
     payload = body["authorizations"][0]["authorization_payload"]
-    assert payload["payment_method_token"] == "tok"
+    assert json.loads(payload["payload"]) == {
+        "type": "scheme",
+        "storedPaymentMethodId": "TESTCARDIDENT01",
+        "threeDS2SdkVersion": "2.2.27",
+    }
+    assert "payment_method_token" not in payload
     assert payload["biometrics_protected_secret"] == "sec"
     assert payload["payment_type"] == "CREDITCARD"
     assert payload["type"] == "adyenAuthorizationPayload"

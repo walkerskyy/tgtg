@@ -83,15 +83,40 @@ def _saved_card_from(response: object) -> dict | None:
     return None
 
 
-def _saved_card_authorization(card: dict, biometrics: dict | None, price: dict | None = None) -> dict:
-    """Pay with a saved card: server-side card identifier + tokens from payment/v4 biometrics."""
-    token = None
+ADYEN_SDK_VERSION = "2.2.27"
+
+
+def _saved_card_adyen_type(card: dict, entries: list) -> str:
+    """Adyen method type for a saved card, from its adyenSavedPaymentMethod entry ('scheme' for cards)."""
+    identifier = card.get("identifier")
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("identifier") != identifier:
+            continue
+        raw = entry.get("adyen_api_payload")
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(parsed, dict) and isinstance(parsed.get("type"), str):
+                return str(parsed["type"])
+    return "scheme"
+
+
+def _saved_card_authorization(card: dict, biometrics: dict | None, price: dict | None = None, adyen_type: str = "scheme") -> dict:
+    """Pay with a saved card: AdyenCustomPayload (type + storedPaymentMethodId + 3DS SDK), no token (APK 26.10.0 lz9/mz9)."""
     secret = None
     if isinstance(biometrics, dict):
-        token = biometrics.get("saved_payment_method_token")
         secret = biometrics.get("biometrics_protected_secret")
     payload: dict = {
-        "payment_method_token": token or card.get("identifier"),
+        "payload": json.dumps(
+            {
+                "type": adyen_type,
+                "storedPaymentMethodId": card.get("identifier"),
+                "threeDS2SdkVersion": ADYEN_SDK_VERSION,
+            },
+            separators=(",", ":"),
+        ),
         "payment_type": str(card.get("payment_type") or "CREDITCARD"),
         "save_payment_method": False,
         "type": "adyenAuthorizationPayload",
@@ -151,6 +176,23 @@ def _reservation_from_dict(data: dict) -> Reservation:
         schedule=Schedule.parse(data.get("schedule")),
         status=data.get("status"),
     )
+
+
+def _extract_price(order: dict) -> dict | None:
+    """Pull the Price dict from an order-shaped payload (create response or order/v8 detail)."""
+    if not isinstance(order, dict):
+        return None
+    total = order.get("total_price")
+    if isinstance(total, dict):
+        return total
+    order_line = order.get("order_line")
+    lines = order_line if isinstance(order_line, list) else [order_line] if isinstance(order_line, dict) else []
+    for line in lines:
+        if isinstance(line, dict):
+            total = line.get("total_price")
+            if isinstance(total, dict):
+                return total
+    return None
 
 
 def _order_from_dict(data: dict) -> Order:
@@ -444,9 +486,9 @@ class Reservations:
         res = self.client.create_order(reservation.item_id, reservation.amount)
         order_id = res.get("id")
         if order_id:
-            price = res.get("total_price") if isinstance(res.get("total_price"), dict) else None
+            price = _extract_price(res)
             if self.pay_probe and price is None:
-                log.warning("PAYPROBE create_order response has no total_price (keys=%s)", sorted(res))
+                log.warning("PAYPROBE create_order response has no price (keys=%s)", sorted(res))
             self.register_order(order_id, reservation.item_id, reservation.amount, reservation.display_name, price=price)
             log.info("Order created for %s (order_id=%s)", reservation.display_name, order_id)
 
@@ -469,6 +511,15 @@ class Reservations:
         order = self.active_orders.get(order_id)
         if order is not None:
             price = order.price
+        if price is None:
+            try:
+                detail = self.client.get_order_detail(order_id)
+                price = _extract_price(detail)
+                if price is not None and order is not None:
+                    order.price = price
+                    self._save()
+            except Exception as exc:
+                log.warning("PAYPROBE order detail failed: %s", exc)
         if price is not None:
             log.info("PAYPROBE order price: %s", price)
         saved_card: dict | None = None
@@ -510,8 +561,9 @@ class Reservations:
             except Exception as exc:
                 log.warning("PAYPROBE biometrics failed: %s", exc)
         if saved_card is not None:
-            body = _saved_card_authorization(saved_card, biometrics, price)
-            log.info("PAYPROBE auth: saved-card token (identifier=%s)", saved_card.get("identifier"))
+            adyen_type = _saved_card_adyen_type(saved_card, entries)
+            body = _saved_card_authorization(saved_card, biometrics, price, adyen_type)
+            log.info("PAYPROBE auth: saved-card (identifier=%s, type=%s)", saved_card.get("identifier"), adyen_type)
         else:
             body = _authorization_body(chosen, price)  # type: ignore[arg-type]
             log.info("PAYPROBE chosen: %s", _redact_secrets(chosen))

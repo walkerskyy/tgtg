@@ -287,3 +287,13 @@ class TgtgClient(_UpstreamTgtgClient):
         if response.status_code != HTTPStatus.OK:
             raise TgtgAPIError(response.status_code, response.content)
         return response.json()
+
+    def get_order_detail(self, order_id: str) -> dict:
+        """Fetch the full order (APK 26.10.0 md9.t: order/v8/{orderId} -> {order: ...})."""
+        self.login()
+        response = self._post(self._get_url(f"order/v8/{order_id}"))
+        if response.status_code != HTTPStatus.OK:
+            raise TgtgAPIError(response.status_code, response.content)
+        data = response.json()
+        order = data.get("order") if isinstance(data, dict) else None
+        return order if isinstance(order, dict) else data

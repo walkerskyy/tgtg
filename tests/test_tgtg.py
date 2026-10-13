@@ -405,3 +405,27 @@ def test_get_order_status():
     )
     client.login = lambda: None  # type: ignore[method-assign]
     assert client.get_order_status("o1") == {"state": "PAYMENT_PENDING"}
+
+
+@responses.activate
+def test_get_order_detail():
+    _datadome_sdk()
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, "order/v8/o7"),
+        json={"order": {"id": "o7", "total_price": {"currency": "AUD", "decimals": 2, "minor_units": 850}}},
+        status=200,
+    )
+    client = TgtgClient(
+        email="test@example.com",
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+    assert client.get_order_detail("o7") == {
+        "id": "o7",
+        "total_price": {"currency": "AUD", "decimals": 2, "minor_units": 850},
+    }
+    assert responses.calls[1].request.method == "POST"
