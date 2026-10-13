@@ -405,6 +405,7 @@ def test_reservation_text_payment_failed():
     text = Telegram._reservation_text(Reservation("123", 1, "Bakery Bag", status=PAYMENT_FAILED))
     assert "PAYMENT FAILED" in text
     assert "TGTG app" in text
+    assert "auto-retry" in text
     text2 = Telegram._reservation_text(Reservation("123", 1, "Bakery Bag", status=PAYMENT_ACTION_REQUIRED))
     assert "verification" in text2
     assert "TGTG app" in text2

@@ -229,7 +229,7 @@ class Telegram(Notifier):
         if item.status == "CONFIRMED":
             return f"{item.display_name} purchased - just pick it up"
         if item.status == PAYMENT_FAILED:
-            return f"{item.display_name} PAYMENT FAILED - reservation still held; open the TGTG app now to pay"
+            return f"{item.display_name} PAYMENT FAILED - auto-retry running; open the TGTG app now if it keeps failing"
         if item.status == PAYMENT_ACTION_REQUIRED:
             return f"{item.display_name} payment needs verification - open the TGTG app to approve it"
         if item.status == UNPAID_WARNING:
