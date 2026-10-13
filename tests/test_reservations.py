@@ -744,6 +744,7 @@ def test_probe_stops_polling_on_payment_failure(tgtg_item: dict, mocker: MockerF
 def test_probe_payment_returns_bool(mocker: MockerFixture):
     mocker.patch("time.sleep")
     client = _probe_client()
+    client.get_payment_status.side_effect = [{"state": "FAILED", "failure_reason": "risk_declined"}]
     r = Reservations(client)
     r.active_orders["o1"] = Order(
         "o1",
@@ -754,6 +755,7 @@ def test_probe_payment_returns_bool(mocker: MockerFixture):
         created_at=int(time.time()),
         price={"total_price": {"minor": 500, "code": "EUR"}},
     )
+    # pay accepted (True) even though the probe's own poll saw FAILED — the watcher handles that next cycle
     assert r._probe_payment("o1", "123", "Test") is True
     client.pay_order.side_effect = RuntimeError("declined")
     assert r._probe_payment("o1", "123", "Test") is False
