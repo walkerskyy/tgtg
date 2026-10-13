@@ -19,7 +19,7 @@ from tgtg_scanner.models import (
     Reservations,
 )
 from tgtg_scanner.models.drop_history import DropHistory
-from tgtg_scanner.models.reservations import UNPAID_WARNING, Order, is_sold_out_error
+from tgtg_scanner.models.reservations import PAYMENT_ACTION_REQUIRED, PAYMENT_FAILED, UNPAID_WARNING, Order, is_sold_out_error
 from tgtg_scanner.models.reservations import Reservation as ReservationObj
 from tgtg_scanner.models.stock_monitor import StockMonitor
 from tgtg_scanner.notifiers import Notifiers
@@ -129,11 +129,15 @@ class Scanner:
     def _load_items(self) -> list[Item]:
         """Fetch configured item IDs and account favorites as Items."""
         items: list[Item] = []
-        for item_id in self.item_ids:
+        for item_id in list(self.item_ids):
             try:
                 items.append(self._item_from_api(self.tgtg_client.get_item(item_id)))
             except TgtgAPIError as err:
-                log.error(err)
+                if err.args and err.args[0] == 410:
+                    log.warning("Configured ItemID %s was deleted (410) - dropping it from the watch list", item_id)
+                    self.item_ids.discard(item_id)
+                else:
+                    log.error(err)
         items.extend(self._load_favorite_items())
         return items
 
@@ -141,7 +145,7 @@ class Scanner:
         try:
             return [self._item_from_api(item) for item in self.tgtg_client.get_favorites()]
         except TgtgAPIError as err:
-            log.error(err)
+            log.error("Failed to load favorites: %s", err)
             self.metrics.get_favorites_errors.inc()
             return []
 
@@ -207,7 +211,7 @@ class Scanner:
             if self.drop_history.in_predicted_window(reservation.item_id, now):
                 return True
         for order in self.reservations.active_orders.values():
-            if order.status in ("RESERVED", UNPAID_WARNING, "PAYMENT_INITIATED"):
+            if order.status in ("RESERVED", UNPAID_WARNING, "PAYMENT_INITIATED", PAYMENT_FAILED, PAYMENT_ACTION_REQUIRED):
                 return True
         return False
 
@@ -229,7 +233,11 @@ class Scanner:
             try:
                 items.append(self._item_from_api(self.tgtg_client.get_item(item_id)))
             except TgtgAPIError as err:
-                log.error(err)
+                if err.args and err.args[0] == 410:
+                    log.warning("Queued item %s was deleted (410) - removing it from the reservation queue", item_id)
+                    self.reservations.remove(item_id)
+                else:
+                    log.error(err)
         self._process_items(items)
         self.reservations.make_orders(self.monitor.state, self.notifiers.send, on_sold_out=self.drop_history.record)
         self._process_order_events()

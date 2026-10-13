@@ -295,3 +295,43 @@ def test_attempt_reservation_prefetches_probe_methods(scanner: Scanner, test_ite
     scanner._attempt_reservation(test_item)
 
     mock_prefetch.assert_called_once_with(test_item.item_id)
+
+
+def test_load_items_prunes_deleted_item_id(scanner: Scanner, mocker: MockerFixture):
+    scanner.item_ids.add("dead1")
+    mocker.patch.object(
+        scanner.tgtg_client,
+        "get_item",
+        side_effect=TgtgAPIError(410, b'{"errors":[{"code":"ENTITY_DELETED"}]}'),
+    )
+    mocker.patch.object(scanner, "_load_favorite_items", return_value=[])
+    assert scanner._load_items() == []
+    assert "dead1" not in scanner.item_ids
+
+
+def test_job_removes_deleted_queued_reservation(scanner: Scanner, tgtg_item: dict, mocker: MockerFixture):
+    fav_item = Item(dict(tgtg_item, item=dict(tgtg_item["item"], item_id="fav1")))
+    scanner.reservations.reserve("gone1", "Gone Bag")
+    mocker.patch.object(scanner, "_load_favorite_items", return_value=[fav_item])
+    mocker.patch.object(scanner, "_process_items")
+    mocker.patch.object(scanner, "_process_order_events")
+    mocker.patch.object(scanner, "_save_tokens")
+    mocker.patch.object(scanner.reservations, "make_orders")
+    mocker.patch.object(
+        scanner.tgtg_client,
+        "get_item",
+        side_effect=TgtgAPIError(410, b'{"errors":[{"code":"ENTITY_DELETED"}]}'),
+    )
+    scanner.notifiers = mocker.MagicMock()
+
+    scanner._fast_job()
+
+    assert scanner.reservations.reservation_query == []
+
+
+def test_fast_mode_when_payment_failed(scanner: Scanner, mocker: MockerFixture):
+    from tgtg_scanner.models.reservations import PAYMENT_FAILED, Order
+
+    mocker.patch.object(scanner.drop_history, "in_predicted_window", return_value=False)
+    scanner.reservations.active_orders["o1"] = Order("o1", "123", 1, "T", status=PAYMENT_FAILED, created_at=1, payment_id="p1")
+    assert scanner._fast_mode_active()

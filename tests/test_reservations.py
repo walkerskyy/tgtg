@@ -4,10 +4,20 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from pytest_mock.plugin import MockerFixture
 
 from tgtg_scanner.errors import TgtgAPIError
 from tgtg_scanner.models.item import Item
-from tgtg_scanner.models.reservations import UNPAID_WARNING, Order, Reservation, Reservations, _extract_price
+from tgtg_scanner.models.reservations import (
+    PAYMENT_ACTION_REQUIRED,
+    PAYMENT_FAILED,
+    UNPAID_WARNING,
+    Order,
+    Reservation,
+    Reservations,
+    _extract_price,
+    _order_from_dict,
+)
 from tgtg_scanner.models.schedule import Schedule
 
 
@@ -659,3 +669,112 @@ def test_prefetch_runs_by_default():
     # second call is cached
     r.prefetch_probe_methods("123")
     assert client.get_payment_methods.call_count == 1  # type: ignore[attr-defined]
+
+
+def test_order_from_dict_keeps_payment_id():
+    order = _order_from_dict({"id": "o1", "payment_id": "p9", "created_at": 5})
+    assert order.payment_id == "p9"
+
+
+def _probe_client() -> MagicMock:
+    client = MagicMock()
+    client.create_order.return_value = {"id": "o1"}
+    client.get_payment_methods.return_value = {
+        "payment_methods_state": "SUCCESS",
+        "payment_methods": [
+            {"payment_type": "PAYPAL", "payment_provider": "ADYEN", "adyen_api_payload": '{"type":"paypal"}'},
+        ],
+    }
+    client.create_payment.return_value = {"payments": [{"payment_id": "p1"}]}
+    client.pay_order.return_value = {"payment_id": "p1"}
+    return client
+
+
+def test_probe_polls_payment_status_until_settled(tgtg_item: dict, mocker: MockerFixture):
+    mocker.patch("time.sleep")
+    client = _probe_client()
+    client.get_payment_status.side_effect = [
+        {"state": "AUTHORIZATION_INITIATED"},
+        {"state": "CAPTURED"},
+    ]
+    r = Reservations(client)
+    r.reserve("123", "Test Item")
+    r.make_orders({"123": Item(tgtg_item)}, MagicMock())
+    assert client.get_payment_status.call_count == 2
+    assert r.active_orders["o1"].payment_id == "p1"
+
+
+def test_probe_stops_polling_on_payment_failure(tgtg_item: dict, mocker: MockerFixture):
+    mocker.patch("time.sleep")
+    client = _probe_client()
+    client.get_payment_status.side_effect = [{"state": "FAILED"}]
+    r = Reservations(client)
+    r.reserve("123", "Test Item")
+    r.make_orders({"123": Item(tgtg_item)}, MagicMock())
+    assert client.get_payment_status.call_count == 1
+    assert r.active_orders["o1"].payment_id == "p1"  # kept so the watcher can keep tracking
+
+
+def test_process_payment_failed_notifies_once(reservations: Reservations):
+    reservations.active_orders["o1"] = Order(
+        "o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1"
+    )
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "FAILED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert [o.status for o in notified] == [PAYMENT_FAILED]
+    assert "o1" in reservations.active_orders  # reservation still held until expiry
+    notified2 = reservations.process_active_orders()
+    assert notified2 == []
+
+
+def test_process_payment_action_required_notifies(reservations: Reservations):
+    reservations.active_orders["o1"] = Order(
+        "o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1"
+    )
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "REAUTHORIZATION_REQUIRED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert [o.status for o in notified] == [PAYMENT_ACTION_REQUIRED]
+    assert "o1" in reservations.active_orders
+
+
+def test_process_in_flight_payment_stays_silent(reservations: Reservations):
+    reservations.active_orders["o1"] = Order(
+        "o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1"
+    )
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "AUTHORIZATION_INITIATED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert notified == []
+    assert reservations.active_orders["o1"].status == "PAYMENT_INITIATED"
+
+
+def test_process_order_reverts_to_reserved_marks_payment_failed(reservations: Reservations):
+    reservations.active_orders["o1"] = Order(
+        "o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=int(time.time()), payment_id="p1"
+    )
+    reservations.client.get_order_status.return_value = {"state": "RESERVED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "AUTHORIZATION_INITIATED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert [o.status for o in notified] == [PAYMENT_FAILED]
+    assert "o1" in reservations.active_orders
+    notified2 = reservations.process_active_orders()
+    assert notified2 == []
+
+
+def test_process_payment_initiated_past_deadline_fails(reservations: Reservations):
+    old = int(time.time()) - 300
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="PAYMENT_INITIATED", created_at=old, payment_id="p1")
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "AUTHORIZATION_INITIATED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert [o.status for o in notified] == [PAYMENT_FAILED]
+
+
+def test_paid_order_does_not_poll_payment(reservations: Reservations):
+    reservations.active_orders["o1"] = Order("o1", "123", 1, "Test", status="PAID", created_at=int(time.time()), payment_id="p1")
+    reservations.client.get_order_status.return_value = {"state": "PAID"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert notified == []
+    reservations.client.get_payment_status.assert_not_called()  # type: ignore[attr-defined]

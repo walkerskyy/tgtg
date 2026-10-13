@@ -399,6 +399,17 @@ def test_telegram_startup_get_me_persistent_timeout_raises(
         Telegram(config, reservations, favorites)
 
 
+def test_reservation_text_payment_failed():
+    from tgtg_scanner.models.reservations import PAYMENT_ACTION_REQUIRED, PAYMENT_FAILED, Reservation
+
+    text = Telegram._reservation_text(Reservation("123", 1, "Bakery Bag", status=PAYMENT_FAILED))
+    assert "PAYMENT FAILED" in text
+    assert "TGTG app" in text
+    text2 = Telegram._reservation_text(Reservation("123", 1, "Bakery Bag", status=PAYMENT_ACTION_REQUIRED))
+    assert "verification" in text2
+    assert "TGTG app" in text2
+
+
 @pytest.fixture
 def mocked_discord(mocker: MockerFixture):
     mocker.patch(

@@ -33,7 +33,7 @@ from telegram.warnings import PTBUserWarning
 from tgtg_scanner.errors import MaskConfigurationError, TelegramConfigurationError
 from tgtg_scanner.models import Config, Favorites, Item, Reservations
 from tgtg_scanner.models.favorites import AddFavoriteRequest, RemoveFavoriteRequest
-from tgtg_scanner.models.reservations import UNPAID_WARNING, Order, Reservation
+from tgtg_scanner.models.reservations import PAYMENT_ACTION_REQUIRED, PAYMENT_FAILED, UNPAID_WARNING, Order, Reservation
 from tgtg_scanner.notifiers.base import Notifier
 
 log = logging.getLogger("tgtg")
@@ -228,6 +228,10 @@ class Telegram(Notifier):
     def _reservation_text(item: Reservation) -> str:
         if item.status == "CONFIRMED":
             return f"{item.display_name} purchased - just pick it up"
+        if item.status == PAYMENT_FAILED:
+            return f"{item.display_name} PAYMENT FAILED - reservation still held; open the TGTG app now to pay"
+        if item.status == PAYMENT_ACTION_REQUIRED:
+            return f"{item.display_name} payment needs verification - open the TGTG app to approve it"
         if item.status == UNPAID_WARNING:
             return f"{item.display_name} RESERVED BUT UNPAID - open the TGTG app now, hold expires soon"
         if item.status and item.status != "reserved":

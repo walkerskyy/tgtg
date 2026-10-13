@@ -13,9 +13,18 @@ from tgtg_scanner.tgtg_client import TgtgClient
 log = logging.getLogger("tgtg")
 
 UNPAID_WARNING = "UNPAID_WARNING"
+PAYMENT_FAILED = "PAYMENT_FAILED"
+PAYMENT_ACTION_REQUIRED = "PAYMENT_ACTION_REQUIRED"
 PAYMENT_DEADLINE = 270  # seconds; TGTG reservation hold is ~5 minutes
 SOLD_OUT_MARKERS = ("sold out", "no longer available", "not available", "out of stock")
 TERMINAL_STATES = frozenset({"CANCELED", "CANCELLED", "EXPIRED", "REFUNDED", "ABORTED"})
+# PaymentStatus enum from the TGTG app (26.10.0)
+PAYMENT_FAILURE_STATES = frozenset({"FAILED", "CANCELLED", "ABORTED", "USER_ABORTED"})
+PAYMENT_ACTION_STATES = frozenset({"REAUTHORIZATION_REQUIRED", "ADDITIONAL_AUTHORIZATION_REQUIRED"})
+PAYMENT_SETTLED_STATES = frozenset({"AUTHORIZED", "CAPTURE_INITIATED", "CAPTURED"})
+PAYMENT_IN_FLIGHT_STATES = frozenset(
+    {"CREATED", "AUTHORIZATION_INITIATED", "ADDITIONAL_AUTHORIZATION_INITIATED", "CANCEL_INITIATED"}
+)
 
 
 def is_sold_out_error(err: Exception) -> bool:
@@ -157,6 +166,7 @@ class Order:
     status: str | None = None
     created_at: int | None = None
     price: dict | None = None
+    payment_id: str | None = None
 
 
 @dataclass
@@ -204,6 +214,7 @@ def _order_from_dict(data: dict) -> Order:
         status=data.get("status"),
         created_at=int(data["created_at"]) if data.get("created_at") is not None else None,
         price=data.get("price"),
+        payment_id=data.get("payment_id"),
     )
 
 
@@ -367,7 +378,9 @@ class Reservations:
 
         - PAID (payment settled) / CONFIRMED (collected): notify once, keep in ledger;
           prune CONFIRMED when it leaves get_active().
-        - PAYMENT_INITIATED: in progress, update status silently.
+        - PAYMENT_INITIATED: in progress, update status silently; failed/stuck payments
+          become PAYMENT_FAILED and notify (order reverts to RESERVED, stuck past
+          PAYMENT_DEADLINE, or payment endpoint reports a failure/3DS-required state).
         - RESERVED past PAYMENT_DEADLINE: set UNPAID_WARNING and notify once.
         - Terminal state (CANCELED/CANCELLED/EXPIRED/REFUNDED/ABORTED): notify and remove.
         - Order entity gone (HTTP 410): notify as DELETED and remove.
@@ -409,12 +422,33 @@ class Reservations:
                     else:
                         log.info("Order %s CONFIRMED (purchased) for %s", order_id, order.display_name)
             elif state == "PAYMENT_INITIATED":
-                if order.status != state:
-                    order.status = state
+                if order.status in (PAYMENT_FAILED, PAYMENT_ACTION_REQUIRED):
+                    pass  # already reported; keep watching until the order reaches a terminal state
+                elif order.status != "PAYMENT_INITIATED":
+                    order.status = "PAYMENT_INITIATED"
                     changed = True
                     log.info("Order %s payment initiated for %s", order_id, order.display_name)
+                elif order.created_at and now - order.created_at >= PAYMENT_DEADLINE:
+                    order.status = PAYMENT_FAILED
+                    changed = True
+                    events.append(order)
+                    log.warning(
+                        "Order %s payment still not complete for %s - marking as failed; open the TGTG app now",
+                        order_id,
+                        order.display_name,
+                    )
             elif state == "RESERVED":
-                if order.status == "RESERVED" and order.created_at and now - order.created_at >= PAYMENT_DEADLINE:
+                if order.status == "PAYMENT_INITIATED":
+                    order.status = PAYMENT_FAILED
+                    changed = True
+                    events.append(order)
+                    log.warning(
+                        "Order %s payment did not complete (back to RESERVED) for %s - open the TGTG app to pay "
+                        "before the hold expires",
+                        order_id,
+                        order.display_name,
+                    )
+                elif order.status == "RESERVED" and order.created_at and now - order.created_at >= PAYMENT_DEADLINE:
                     order.status = UNPAID_WARNING
                     changed = True
                     events.append(order)
@@ -428,12 +462,52 @@ class Reservations:
                     changed = True
                 else:
                     log.warning("Order %s has unknown state %r for %s - keeping in ledger", order_id, state, order.display_name)
+            if (
+                order.payment_id
+                and state not in TERMINAL_STATES
+                and order.status not in ("PAID", "CONFIRMED", PAYMENT_FAILED, PAYMENT_ACTION_REQUIRED)
+            ):
+                if self._check_payment(order, order_id, events):
+                    changed = True
         if any(o.status == "CONFIRMED" for o in self.active_orders.values()):
             if self._prune_collected_orders():
                 changed = True
         if changed:
             self._save()
         return events
+
+    def _check_payment(self, order: Order, order_id: str, events: list[Order]) -> bool:
+        """Poll the payment endpoint; on failure/3DS-required set status and notify. Returns True when changed."""
+        payment_id = order.payment_id
+        if not payment_id:
+            return False
+        try:
+            res = self.client.get_payment_status(payment_id)
+        except Exception as exc:
+            log.warning("Failed to get payment status for order %s: %s", order_id, exc)
+            return False
+        pstate = res.get("state", "") if isinstance(res, dict) else ""
+        if pstate in PAYMENT_FAILURE_STATES:
+            order.status = PAYMENT_FAILED
+            events.append(order)
+            log.warning(
+                "Payment for order %s failed (%s) for %s - reservation still held; open the TGTG app to pay now",
+                order_id,
+                pstate,
+                order.display_name,
+            )
+            return True
+        if pstate in PAYMENT_ACTION_STATES:
+            order.status = PAYMENT_ACTION_REQUIRED
+            events.append(order)
+            log.warning(
+                "Payment for order %s requires verification (%s) for %s - open the TGTG app to approve it",
+                order_id,
+                pstate,
+                order.display_name,
+            )
+            return True
+        return False
 
     def _prune_collected_orders(self) -> bool:
         """Drop CONFIRMED orders that no longer appear in get_active(). Returns True when changed."""
@@ -596,11 +670,50 @@ class Reservations:
         log.info("PAYPROBE pay_order: %s", _redact_secrets(result))
         payment_id = _first_payment_id(result) or payment_id
         if payment_id:
+            tracked = self.active_orders.get(order_id)
+            if tracked is not None:
+                tracked.payment_id = payment_id
+                self._save()
+            self._poll_payment_status(order_id, payment_id)
+
+    def _poll_payment_status(self, order_id: str, payment_id: str) -> None:
+        """Poll the fresh payment until it leaves the in-flight states or we time out."""
+        state: str | None = None
+        for attempt in range(5):
             try:
                 status = self.client.get_payment_status(payment_id)
                 log.info("PAYPROBE payment_status: %s", _redact_secrets(status))
+                state = status.get("state") if isinstance(status, dict) else None
             except Exception as exc:
                 log.warning("PAYPROBE payment_status failed: %s", exc)
+                return
+            if state in PAYMENT_FAILURE_STATES:
+                log.warning(
+                    "PAYPROBE payment %s failed for order %s (state=%s) - watching order status", payment_id, order_id, state
+                )
+                return
+            if state in PAYMENT_ACTION_STATES:
+                log.warning(
+                    "PAYPROBE payment %s needs verification for order %s (state=%s) - open the TGTG app to approve it",
+                    payment_id,
+                    order_id,
+                    state,
+                )
+                return
+            if state in PAYMENT_SETTLED_STATES:
+                log.info("PAYPROBE payment %s settled for order %s (state=%s)", payment_id, order_id, state)
+                return
+            if state is not None and state not in PAYMENT_IN_FLIGHT_STATES:
+                log.warning("PAYPROBE payment %s in unexpected state %s for order %s", payment_id, state, order_id)
+                return
+            if attempt < 4:
+                time.sleep(2)
+        log.warning(
+            "PAYPROBE payment %s still %s for order %s after polling - continuing to watch via order status",
+            payment_id,
+            state,
+            order_id,
+        )
 
     def _log_order_status(self, order_id: str) -> None:
         try:
