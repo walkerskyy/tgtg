@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from http import HTTPStatus
+from pathlib import Path  # noqa: F401
 
 log = logging.getLogger("tgtg")
 
