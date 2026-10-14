@@ -39,6 +39,8 @@ tgtg_server = "tests.tgtg_server:main"
 documentation = "https://github.com/Der-Henning/tgtg/wiki"
 repository = "https://github.com/Der-Henning/tgtg"
 
+[project.optional-dependencies]
+captcha = ["browser-cookie3 (>=0.20.0,<1.0.0)"]
 [tool.poetry]
 packages = [{ include = "tgtg_scanner" }]
 include = [{ path = "tgtg_scanner/static/*", format = ["sdist", "wheel"] }]

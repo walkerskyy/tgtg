@@ -1,11 +1,13 @@
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from tgtg_scanner.captcha import (
     CaptchaChallenge,
     captcha_url_from_response,
     normalize_datadome_value,
+    read_browser_datadome,
     read_inbox_datadome,
 )
 
@@ -106,3 +108,58 @@ def test_read_inbox_strips_utf8_bom(tmp_path: Path):
     inbox = tmp_path / "datadome_in"
     inbox.write_bytes(b"\xef\xbb\xbffreshcookie")
     assert read_inbox_datadome(inbox) == "freshcookie"
+
+
+def test_read_browser_missing_library_warns_and_returns_none(mocker):
+    challenge = CaptchaChallenge(url=CAPTCHA_URL, first_seen=datetime.now(timezone.utc))
+    # None in sys.modules makes `import browser_cookie3` raise ImportError
+    mocker.patch.dict("sys.modules", {"browser_cookie3": None})
+    assert read_browser_datadome("chrome", challenge=challenge) is None
+    assert challenge.warned is True
+
+
+def test_read_browser_unsupported_name_warns(mocker):
+    fake = SimpleNamespace()  # no chrome() attr
+    mocker.patch.dict("sys.modules", {"browser_cookie3": fake})
+    challenge = CaptchaChallenge(url=CAPTCHA_URL, first_seen=datetime.now(timezone.utc))
+    assert read_browser_datadome("netscape", challenge=challenge) is None
+    assert challenge.warned is True
+
+
+def test_read_browser_warn_once_suppresses_repeat(mocker):
+    fake = SimpleNamespace()
+    mocker.patch.dict("sys.modules", {"browser_cookie3": fake})
+    challenge = CaptchaChallenge(url=CAPTCHA_URL, first_seen=datetime.now(timezone.utc))
+    warn = mocker.patch("tgtg_scanner.captcha.log.warning")
+    read_browser_datadome("netscape", challenge=challenge)
+    read_browser_datadome("netscape", challenge=challenge)
+    assert warn.call_count == 1
+
+
+def test_read_browser_extracts_newest_toogoodtogo_cookie(mocker):
+    fake = SimpleNamespace(
+        chrome=lambda domain_name=None: [
+            SimpleNamespace(name="datadome", value="stale", domain=".toogoodtogo.com", expires=100),
+            SimpleNamespace(name="datadome", value="fresh", domain=".toogoodtogo.com", expires=200),
+            SimpleNamespace(name="other", value="nope", domain=".toogoodtogo.com", expires=300),
+        ]
+    )
+    mocker.patch.dict("sys.modules", {"browser_cookie3": fake})
+    assert read_browser_datadome("chrome") == "fresh"
+
+
+def test_read_browser_no_candidate_returns_none(mocker):
+    fake = SimpleNamespace(chrome=lambda domain_name=None: [])
+    mocker.patch.dict("sys.modules", {"browser_cookie3": fake})
+    assert read_browser_datadome("chrome") is None
+
+
+def test_read_browser_loader_error_warns_and_returns_none(mocker):
+    def boom(domain_name=None):
+        raise RuntimeError("keyring locked")
+
+    fake = SimpleNamespace(chrome=boom)
+    mocker.patch.dict("sys.modules", {"browser_cookie3": fake})
+    challenge = CaptchaChallenge(url=CAPTCHA_URL, first_seen=datetime.now(timezone.utc))
+    assert read_browser_datadome("chrome", challenge=challenge) is None
+    assert challenge.warned is True

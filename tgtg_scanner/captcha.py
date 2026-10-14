@@ -69,3 +69,38 @@ def read_inbox_datadome(path: Path) -> str | None:
         log.warning("Captcha inbox %s does not contain a plausible datadome cookie - ignoring", path)
         return None
     return value
+
+
+def read_browser_datadome(browser: str, *, challenge: CaptchaChallenge | None = None) -> str | None:
+    """Read the datadome cookie for toogoodtogo.com from the local browser cookie store."""
+    try:
+        import browser_cookie3
+    except ImportError:
+        _warn_once(
+            challenge,
+            "browser_cookie3 not installed - browser cookie auto-read disabled "
+            "(pip install 'tgtg-scanner[captcha]'). Falling back to file inbox.",
+        )
+        return None
+    loader = getattr(browser_cookie3, browser.lower(), None)
+    if not callable(loader):
+        _warn_once(challenge, f"Unsupported CaptchaBrowser '{browser}' - falling back to file inbox.")
+        return None
+    try:
+        jar = loader(domain_name=COOKIE_DOMAIN)
+    except Exception as exc:
+        _warn_once(challenge, f"Could not read {browser} cookies ({exc}) - falling back to file inbox.")
+        return None
+    candidates = [c for c in jar if c.name == "datadome" and c.value and COOKIE_DOMAIN in (c.domain or "")]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: c.expires or 0)
+    return str(candidates[-1].value)
+
+
+def _warn_once(challenge: CaptchaChallenge | None, message: str) -> None:
+    if challenge is not None:
+        if challenge.warned:
+            return
+        challenge.warned = True
+    log.warning(message)
