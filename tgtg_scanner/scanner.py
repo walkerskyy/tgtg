@@ -273,27 +273,45 @@ class Scanner:
             if candidate is None and inbox_path is not None:
                 candidate = read_inbox_datadome(inbox_path)
                 from_inbox = candidate is not None
-            if not candidate or candidate == extract_datadome(self.tgtg_client):
+            if not candidate:
                 log.debug("Captcha pending - no fresh datadome cookie yet (solve: %s)", challenge.url)
+                return
+            previous = extract_datadome(self.tgtg_client)
+            if candidate == previous:
+                log.debug("Captcha candidate not fresh - still waiting (solve: %s)", challenge.url)
                 return
             self.tgtg_client.apply_datadome(candidate)
             try:
                 self.tgtg_client.get_favorites()
             except Exception as exc:
-                if isinstance(exc, TgtgAPIError):
+                status = exc.args[0] if isinstance(exc, TgtgAPIError) and exc.args else None
+                if status == 403:
                     log.warning("Candidate datadome cookie rejected: %s", exc)
                 else:
-                    log.warning("Datadome recovery probe failed (%s) - staying in cooldown", exc)
+                    log.warning("Captcha probe failed (transient: %s) - retrying next cooldown", exc)
                 if self.tgtg_client.captcha is None:
                     self.tgtg_client.captcha = challenge
+                if previous:
+                    self.tgtg_client.apply_datadome(previous)
+                else:
+                    self.tgtg_client.cookie = None
+                    try:
+                        jar = self.tgtg_client.session.cookies
+                        for stored in [c for c in jar if c.name == "datadome"]:
+                            jar.clear(stored.domain, stored.path, stored.name)
+                    except Exception as jar_exc:
+                        log.debug("Could not clear datadome cookie from session jar: %s", jar_exc)
                 return
-            self.tgtg_client.captcha = None
-            self._save_tokens()
+            try:
+                self._save_tokens()
+            except Exception as exc:
+                log.warning("Could not persist recovered datadome cookie: %s", exc)
             if from_inbox and inbox_path is not None:
                 try:
                     inbox_path.unlink()
                 except OSError as exc:
                     log.warning("Could not remove consumed captcha inbox %s: %s", inbox_path, exc)
+            self.tgtg_client.captcha = None
             log.info("Datadome captcha recovered - resuming normal scanning")
         except Exception as exc:
             log.warning("Captcha recovery attempt failed: %s", exc)
