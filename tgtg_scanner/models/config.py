@@ -488,6 +488,8 @@ class TgtgConfig(BaseConfig):
     apk_version: str | None = None
     user_agent: str | None = None
     base_url: str = BASE_URL
+    captcha_browser: str = "chrome"
+    captcha_cooldown: int = 600
 
     def _read_ini(self, parser: configparser.ConfigParser):
         self._ini_get(parser, "TGTG", "Username", "username")
@@ -500,6 +502,8 @@ class TgtgConfig(BaseConfig):
         self._ini_get_int(parser, "TGTG", "PollingWaitTime", "polling_wait_time")
         self._ini_get(parser, "TGTG", "APKVersion", "apk_version")
         self._ini_get(parser, "TGTG", "UserAgent", "user_agent")
+        self._ini_get(parser, "TGTG", "CaptchaBrowser", "captcha_browser")
+        self._ini_get_int(parser, "TGTG", "CaptchaCooldown", "captcha_cooldown")
 
     def _read_env(self):
         self._env_get("TGTG_USERNAME", "username")
@@ -512,6 +516,8 @@ class TgtgConfig(BaseConfig):
         self._env_get_int("TGTG_POLLING_WAIT_TIME", "polling_wait_time")
         self._env_get("TGTG_APK_VERSION", "apk_version")
         self._env_get("TGTG_USER_AGENT", "user_agent")
+        self._env_get("TGTG_CAPTCHA_BROWSER", "captcha_browser")
+        self._env_get_int("TGTG_CAPTCHA_COOLDOWN", "captcha_cooldown")
 
 
 @dataclass

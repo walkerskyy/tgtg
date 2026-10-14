@@ -112,6 +112,8 @@ array accept two optional fields:
 | PollingWaitTime     | TGTG_POLLING_WAIT_TIME     | time between polling retries in seconds | `5`     |          |
 | APKVersion          | TGTG_APK_VERSION           | APK Version used in User Agent Header   | latest  |          |
 | UserAgent           | TGTG_USER_AGENT            | Fixed User Agent Header                 | auto    |          |
+| CaptchaBrowser      | TGTG_CAPTCHA_BROWSER       | browser cookie store auto-read for the fresh datadome cookie after a captcha (`off` disables) | `chrome` |          |
+| CaptchaCooldown     | TGTG_CAPTCHA_COOLDOWN      | seconds to wait between probes while a captcha challenge is pending | `600`   |          |
 
 ### [LOCATION] / Location settings
 

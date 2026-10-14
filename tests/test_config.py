@@ -143,3 +143,35 @@ def test_legacy_pay_probe_ini_ignored(tmp_path, monkeypatch: pytest.MonkeyPatch)
     ini.write_text("[RESERVATION]\nPayProbe = true\n")
     config = Config(str(ini), disable_tests=True)
     assert config.reservation.fast_poll is True  # default unaffected
+
+
+def test_captcha_config_defaults(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("TGTG_CAPTCHA_BROWSER", raising=False)
+    monkeypatch.delenv("TGTG_CAPTCHA_COOLDOWN", raising=False)
+    config = Config(disable_tests=True)
+    assert config.tgtg.captcha_browser == "chrome"
+    assert config.tgtg.captcha_cooldown == 600
+
+
+def test_captcha_config_from_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TGTG_CAPTCHA_BROWSER", "firefox")
+    monkeypatch.setenv("TGTG_CAPTCHA_COOLDOWN", "120")
+    config = Config(disable_tests=True)
+    assert config.tgtg.captcha_browser == "firefox"
+    assert config.tgtg.captcha_cooldown == 120
+
+
+def test_captcha_browser_off_is_valid(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TGTG_CAPTCHA_BROWSER", "off")
+    config = Config(disable_tests=True)
+    assert config.tgtg.captcha_browser == "off"
+
+
+def test_captcha_config_ini(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("TGTG_CAPTCHA_BROWSER", raising=False)
+    monkeypatch.delenv("TGTG_CAPTCHA_COOLDOWN", raising=False)
+    ini = tmp_path / "config.ini"
+    ini.write_text("[TGTG]\nCaptchaBrowser = firefox\nCaptchaCooldown = 120\n")
+    config = Config(str(ini), disable_tests=True)
+    assert config.tgtg.captcha_browser == "firefox"
+    assert config.tgtg.captcha_cooldown == 120
