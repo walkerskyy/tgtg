@@ -1,4 +1,6 @@
+import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from pytest_mock.plugin import MockerFixture
@@ -406,3 +408,149 @@ def test_run_job_uses_fast_job_in_fast_mode(scanner: Scanner, mocker: MockerFixt
 
     mock_fast.assert_called_once()
     mock_job.assert_not_called()
+
+
+def test_recover_captcha_browser_success_resumes(scanner: Scanner, tmp_path: Path, mocker: MockerFixture, caplog):
+    scanner.config.token_path = str(tmp_path)
+    scanner.tgtg_client.captcha = _pending_captcha()
+    mock_browser = mocker.patch("tgtg_scanner.scanner.read_browser_datadome", return_value="browsercookie")
+    mock_inbox = mocker.patch("tgtg_scanner.scanner.read_inbox_datadome")
+    mock_favorites = mocker.patch.object(scanner.tgtg_client, "get_favorites", return_value=[])
+    mock_save = mocker.patch.object(scanner, "_save_tokens")
+
+    with caplog.at_level(logging.INFO, logger="tgtg"):
+        scanner._recover_captcha()
+
+    mock_browser.assert_called_once()
+    mock_inbox.assert_not_called()
+    mock_favorites.assert_called_once()
+    mock_save.assert_called_once()
+    assert scanner.tgtg_client.captcha is None
+    assert scanner.tgtg_client.cookie == "datadome=browsercookie"
+    assert "resuming normal scanning" in caplog.text
+
+
+def test_recover_captcha_falls_back_to_inbox(scanner: Scanner, tmp_path: Path, mocker: MockerFixture):
+    scanner.config.token_path = str(tmp_path)
+    (tmp_path / "datadome_in").write_text("datadome=inboxcookie; Path=/\n", encoding="utf-8")
+    scanner.tgtg_client.captcha = _pending_captcha()
+    mock_browser = mocker.patch("tgtg_scanner.scanner.read_browser_datadome", return_value=None)
+    mock_inbox = mocker.patch("tgtg_scanner.scanner.read_inbox_datadome", return_value="inboxcookie")
+    mock_favorites = mocker.patch.object(scanner.tgtg_client, "get_favorites", return_value=[])
+    mock_save = mocker.patch.object(scanner, "_save_tokens")
+
+    scanner._recover_captcha()
+
+    mock_browser.assert_called_once()
+    mock_inbox.assert_called_once_with(Path(tmp_path, "datadome_in"))
+    assert scanner.tgtg_client.captcha is None
+    assert scanner.tgtg_client.cookie == "datadome=inboxcookie"
+    mock_favorites.assert_called_once()
+    mock_save.assert_called_once()
+    assert not (tmp_path / "datadome_in").exists()
+
+
+def test_recover_captcha_stays_pending_on_failed_probe(scanner: Scanner, tmp_path: Path, mocker: MockerFixture, caplog):
+    scanner.config.token_path = str(tmp_path)
+    (tmp_path / "datadome_in").write_text("badcookie", encoding="utf-8")
+    scanner.tgtg_client.captcha = _pending_captcha()
+    mocker.patch("tgtg_scanner.scanner.read_browser_datadome", return_value=None)
+    mocker.patch.object(scanner.tgtg_client, "get_favorites", side_effect=TgtgAPIError(403, b"captcha challenge"))
+    mock_save = mocker.patch.object(scanner, "_save_tokens")
+
+    with caplog.at_level(logging.WARNING, logger="tgtg"):
+        scanner._recover_captcha()
+
+    assert scanner.tgtg_client.captcha is not None
+    assert scanner.tgtg_client.cookie == "datadome=badcookie"
+    mock_save.assert_not_called()
+    assert (tmp_path / "datadome_in").exists()
+    assert "rejected" in caplog.text
+
+
+def test_recover_captcha_rearms_challenge_when_probe_clears_it(scanner: Scanner, tmp_path: Path, mocker: MockerFixture):
+    scanner.config.token_path = str(tmp_path)
+    challenge = _pending_captcha()
+    challenge.warned = True
+    scanner.tgtg_client.captcha = challenge
+    mocker.patch("tgtg_scanner.scanner.read_browser_datadome", return_value="newcookie")
+
+    def probe():
+        scanner.tgtg_client.captcha = None  # a 2xx mid-probe (paged fetch) clears it
+        raise TgtgAPIError(429, b"rate limited")
+
+    mocker.patch.object(scanner.tgtg_client, "get_favorites", side_effect=probe)
+    mocker.patch.object(scanner, "_save_tokens")
+
+    scanner._recover_captcha()
+
+    assert scanner.tgtg_client.captcha is challenge
+    assert scanner.tgtg_client.captcha.warned
+
+
+def test_recover_captcha_no_candidates_logs_once_per_cycle(scanner: Scanner, tmp_path: Path, mocker: MockerFixture, caplog):
+    scanner.config.token_path = str(tmp_path)
+    scanner.tgtg_client.captcha = _pending_captcha()
+    mocker.patch("tgtg_scanner.scanner.read_browser_datadome", return_value=None)
+    mocker.patch("tgtg_scanner.scanner.read_inbox_datadome", return_value=None)
+    mock_favorites = mocker.patch.object(scanner.tgtg_client, "get_favorites")
+    mock_apply = mocker.patch.object(scanner.tgtg_client, "apply_datadome")
+
+    with caplog.at_level(logging.DEBUG, logger="tgtg"):
+        scanner._recover_captcha()
+        scanner._recover_captcha()
+
+    mock_favorites.assert_not_called()
+    mock_apply.assert_not_called()
+    assert scanner.tgtg_client.captcha is not None
+    waiting = [record for record in caplog.records if "no fresh datadome cookie" in record.getMessage()]
+    assert len(waiting) == 2
+
+
+def test_recover_captcha_browser_off_skips_browser_reader(scanner: Scanner, tmp_path: Path, mocker: MockerFixture):
+    scanner.config.token_path = str(tmp_path)
+    scanner.config.tgtg.captcha_browser = "off"
+    scanner.tgtg_client.captcha = _pending_captcha()
+    mock_browser = mocker.patch("tgtg_scanner.scanner.read_browser_datadome")
+    mock_inbox = mocker.patch("tgtg_scanner.scanner.read_inbox_datadome", return_value=None)
+
+    scanner._recover_captcha()
+
+    mock_browser.assert_not_called()
+    mock_inbox.assert_called_once_with(Path(tmp_path, "datadome_in"))
+
+
+def test_recover_captcha_skips_probe_for_unchanged_cookie(scanner: Scanner, tmp_path: Path, mocker: MockerFixture, caplog):
+    scanner.config.token_path = str(tmp_path)
+    scanner.tgtg_client.captcha = _pending_captcha()
+    scanner.tgtg_client.apply_datadome("samecookie")
+    mocker.patch("tgtg_scanner.scanner.read_browser_datadome", return_value="samecookie")
+    mock_favorites = mocker.patch.object(scanner.tgtg_client, "get_favorites")
+    mock_save = mocker.patch.object(scanner, "_save_tokens")
+
+    with caplog.at_level(logging.DEBUG, logger="tgtg"):
+        scanner._recover_captcha()
+
+    mock_favorites.assert_not_called()
+    mock_save.assert_not_called()
+    assert scanner.tgtg_client.captcha is not None
+    assert "no fresh datadome cookie" in caplog.text
+
+
+def test_recover_captcha_swallows_unexpected_exceptions(scanner: Scanner, tmp_path: Path, mocker: MockerFixture):
+    scanner.config.token_path = str(tmp_path)
+    scanner.tgtg_client.captcha = _pending_captcha()
+    mocker.patch("tgtg_scanner.scanner.read_browser_datadome", side_effect=RuntimeError("boom"))
+
+    scanner._recover_captcha()  # must not raise
+
+    assert scanner.tgtg_client.captcha is not None
+
+
+def test_recover_captcha_noop_without_challenge(scanner: Scanner, mocker: MockerFixture):
+    scanner.tgtg_client.captcha = None
+    mock_favorites = mocker.patch.object(scanner.tgtg_client, "get_favorites")
+
+    scanner._recover_captcha()
+
+    mock_favorites.assert_not_called()

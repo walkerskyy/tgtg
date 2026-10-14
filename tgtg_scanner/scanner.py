@@ -8,6 +8,7 @@ from typing import Any, NoReturn
 
 from progress.spinner import Spinner
 
+from tgtg_scanner.captcha import read_browser_datadome, read_inbox_datadome
 from tgtg_scanner.errors import TgtgAPIError
 from tgtg_scanner.models import (
     Config,
@@ -256,8 +257,46 @@ class Scanner:
             self._job()
 
     def _recover_captcha(self) -> None:
-        """Handle a pending DataDome challenge: probe for a recovered cookie, else back off."""
-        raise NotImplementedError("captcha recovery wired in the next task")
+        """Attempt datadome recovery for a pending captcha challenge (never raises)."""
+        challenge = self.tgtg_client.captcha
+        if challenge is None:
+            return
+        try:
+            candidate: str | None = None
+            from_inbox = False
+            browser = self.config.tgtg.captcha_browser
+            if browser and browser.lower() != "off":
+                candidate = read_browser_datadome(browser, challenge=challenge)
+            inbox_path: Path | None = None
+            if self.config.token_path:
+                inbox_path = Path(self.config.token_path, "datadome_in")
+            if candidate is None and inbox_path is not None:
+                candidate = read_inbox_datadome(inbox_path)
+                from_inbox = candidate is not None
+            if not candidate or candidate == extract_datadome(self.tgtg_client):
+                log.debug("Captcha pending - no fresh datadome cookie yet (solve: %s)", challenge.url)
+                return
+            self.tgtg_client.apply_datadome(candidate)
+            try:
+                self.tgtg_client.get_favorites()
+            except Exception as exc:
+                if isinstance(exc, TgtgAPIError):
+                    log.warning("Candidate datadome cookie rejected: %s", exc)
+                else:
+                    log.warning("Datadome recovery probe failed (%s) - staying in cooldown", exc)
+                if self.tgtg_client.captcha is None:
+                    self.tgtg_client.captcha = challenge
+                return
+            self.tgtg_client.captcha = None
+            self._save_tokens()
+            if from_inbox and inbox_path is not None:
+                try:
+                    inbox_path.unlink()
+                except OSError as exc:
+                    log.warning("Could not remove consumed captcha inbox %s: %s", inbox_path, exc)
+            log.info("Datadome captcha recovered - resuming normal scanning")
+        except Exception as exc:
+            log.warning("Captcha recovery attempt failed: %s", exc)
 
     def _fast_job(self) -> None:
         """Reduced cycle while fast mode is active."""
