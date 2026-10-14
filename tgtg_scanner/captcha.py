@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from http import HTTPStatus
-from pathlib import Path  # noqa: F401
+from pathlib import Path
 
 log = logging.getLogger("tgtg")
 
@@ -53,3 +53,15 @@ def normalize_datadome_value(value: str) -> str | None:
     if value.lower().startswith("datadome="):
         return None
     return value
+
+
+def read_inbox_datadome(path: Path) -> str | None:
+    """Read a datadome value dropped into the inbox file by the user."""
+    try:
+        if not path.is_file():
+            return None
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        log.warning("Could not read captcha inbox %s: %s", path, exc)
+        return None
+    return normalize_datadome_value(raw)

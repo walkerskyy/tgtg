@@ -1,10 +1,12 @@
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from tgtg_scanner.captcha import (
     CaptchaChallenge,
     captcha_url_from_response,
     normalize_datadome_value,
+    read_inbox_datadome,
 )
 
 
@@ -70,3 +72,31 @@ def test_normalize_datadome_blank_value_returns_none():
 def test_challenge_defaults_warned_false():
     challenge = CaptchaChallenge(url=CAPTCHA_URL, first_seen=datetime.now(timezone.utc))
     assert challenge.warned is False
+
+
+def test_read_inbox_missing_file(tmp_path: Path):
+    assert read_inbox_datadome(tmp_path / "datadome_in") is None
+
+
+def test_read_inbox_raw_value(tmp_path: Path):
+    inbox = tmp_path / "datadome_in"
+    inbox.write_text("freshcookie\n", encoding="utf-8")
+    assert read_inbox_datadome(inbox) == "freshcookie"
+
+
+def test_read_inbox_cookie_header_form(tmp_path: Path):
+    inbox = tmp_path / "datadome_in"
+    inbox.write_text("datadome=freshcookie; Path=/\n", encoding="utf-8")
+    assert read_inbox_datadome(inbox) == "freshcookie"
+
+
+def test_read_inbox_empty_file(tmp_path: Path):
+    inbox = tmp_path / "datadome_in"
+    inbox.write_text("   \n", encoding="utf-8")
+    assert read_inbox_datadome(inbox) is None
+
+
+def test_read_inbox_garbage_bytes_still_returns_string(tmp_path: Path):
+    inbox = tmp_path / "datadome_in"
+    inbox.write_bytes(b"\x00\x01abc")
+    assert read_inbox_datadome(inbox) == "\x00\x01abc"
