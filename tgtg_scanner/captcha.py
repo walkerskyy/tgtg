@@ -49,5 +49,7 @@ def normalize_datadome_value(value: str) -> str | None:
         return None
     match = DATADOME_RE.search(value)
     if match:
-        return match.group(1).strip()
+        return match.group(1).strip() or None
+    if value.lower().startswith("datadome="):
+        return None
     return value

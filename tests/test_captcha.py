@@ -59,6 +59,14 @@ def test_normalize_empty_returns_none():
     assert normalize_datadome_value("   ") is None
 
 
+def test_normalize_datadome_without_value_returns_none():
+    assert normalize_datadome_value("datadome=") is None
+
+
+def test_normalize_datadome_blank_value_returns_none():
+    assert normalize_datadome_value("datadome= ;") is None
+
+
 def test_challenge_defaults_warned_false():
     challenge = CaptchaChallenge(url=CAPTCHA_URL, first_seen=datetime.now(timezone.utc))
     assert challenge.warned is False
