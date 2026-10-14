@@ -1,0 +1,64 @@
+import json
+from datetime import datetime, timezone
+
+from tgtg_scanner.captcha import (
+    CaptchaChallenge,
+    captcha_url_from_response,
+    normalize_datadome_value,
+)
+
+
+class _Resp:
+    def __init__(self, status_code: int, body=None, *, json_error: bool = False):
+        self.status_code = status_code
+        self._body = body
+        self._json_error = json_error
+
+    def json(self):
+        if self._json_error:
+            raise json.JSONDecodeError("expecting value", "", 0)
+        return self._body
+
+
+CAPTCHA_URL = "https://geo.captcha-delivery.com/interstitial/abc"
+
+
+def test_captcha_url_from_interstitial_403():
+    assert captcha_url_from_response(_Resp(403, {"url": CAPTCHA_URL})) == CAPTCHA_URL
+
+
+def test_captcha_url_ignores_non_captcha_403():
+    assert captcha_url_from_response(_Resp(403, {"url": "https://example.com/x"})) is None
+
+
+def test_captcha_url_ignores_200():
+    assert captcha_url_from_response(_Resp(200, {"url": CAPTCHA_URL})) is None
+
+
+def test_captcha_url_ignores_non_json_body():
+    assert captcha_url_from_response(_Resp(403, json_error=True)) is None
+
+
+def test_captcha_url_ignores_non_dict_body():
+    assert captcha_url_from_response(_Resp(403, ["not", "a", "dict"])) is None
+
+
+def test_normalize_bare_value():
+    assert normalize_datadome_value("abc123") == "abc123"
+
+
+def test_normalize_cookie_header_fragment():
+    assert normalize_datadome_value("datadome=xyz; Path=/") == "xyz"
+
+
+def test_normalize_full_cookie_string():
+    assert normalize_datadome_value("datadome=xyz") == "xyz"
+
+
+def test_normalize_empty_returns_none():
+    assert normalize_datadome_value("   ") is None
+
+
+def test_challenge_defaults_warned_false():
+    challenge = CaptchaChallenge(url=CAPTCHA_URL, first_seen=datetime.now(timezone.utc))
+    assert challenge.warned is False
