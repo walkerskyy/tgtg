@@ -1,6 +1,9 @@
+from datetime import datetime, timezone
+
 import pytest
 from pytest_mock.plugin import MockerFixture
 
+from tgtg_scanner.captcha import CaptchaChallenge
 from tgtg_scanner.errors import TgtgAPIError
 from tgtg_scanner.models import Config, Item
 from tgtg_scanner.models.schedule import Schedule
@@ -246,7 +249,7 @@ def test_fast_mode_disabled_by_config(scanner: Scanner, mocker: MockerFixture):
     scanner.config.reservation.fast_poll = False
     scanner.reservations.reserve("123", "Test")
     mocker.patch.object(scanner.drop_history, "in_predicted_window", return_value=True)
-    # _fast_mode_active still reports True (it's the signal); the gate is in run()/_next_sleep_time
+    # _fast_mode_active still reports True (it's the signal); the gate is in _run_job/_next_sleep_time
     assert scanner._fast_mode_active()
     assert scanner._next_sleep_time() >= scanner.config.sleep_time * 0.9
 
@@ -345,3 +348,61 @@ def test_fast_mode_when_payment_retry_pending(scanner: Scanner, mocker: MockerFi
         "o1", "123", 1, "T", status=PAYMENT_RETRY_PENDING, created_at=1, payment_id="p1"
     )
     assert scanner._fast_mode_active()
+
+
+def _pending_captcha() -> CaptchaChallenge:
+    return CaptchaChallenge(url="https://geo.captcha-delivery.com/interstitial/x", first_seen=datetime.now(timezone.utc))
+
+
+def test_next_sleep_uses_captcha_cooldown(scanner: Scanner, mocker: MockerFixture):
+    scanner.tgtg_client.captcha = _pending_captcha()
+    scanner.config.tgtg.captcha_cooldown = 600
+    mocker.patch("tgtg_scanner.scanner.random.uniform", return_value=1.05)
+
+    assert scanner._next_sleep_time() == 600 * 1.05
+
+
+def test_next_sleep_cooldown_clamps_nonpositive(scanner: Scanner, mocker: MockerFixture):
+    scanner.tgtg_client.captcha = _pending_captcha()
+    mocker.patch("tgtg_scanner.scanner.random.uniform", return_value=1.0)
+    scanner.config.tgtg.captcha_cooldown = 0
+    assert scanner._next_sleep_time() == 600.0
+    scanner.config.tgtg.captcha_cooldown = -5
+    assert scanner._next_sleep_time() == 600.0
+
+
+def test_run_job_routes_to_recovery_when_captcha_pending(scanner: Scanner, mocker: MockerFixture):
+    scanner.tgtg_client.captcha = _pending_captcha()
+    mock_recover = mocker.patch.object(scanner, "_recover_captcha")
+    mock_job = mocker.patch.object(scanner, "_job")
+    mock_fast = mocker.patch.object(scanner, "_fast_job")
+
+    scanner._run_job()
+
+    mock_recover.assert_called_once()
+    mock_job.assert_not_called()
+    mock_fast.assert_not_called()
+
+
+def test_run_job_runs_normal_job_when_no_captcha(scanner: Scanner, mocker: MockerFixture):
+    mock_recover = mocker.patch.object(scanner, "_recover_captcha")
+    mock_job = mocker.patch.object(scanner, "_job")
+    mock_fast = mocker.patch.object(scanner, "_fast_job")
+
+    scanner._run_job()
+
+    mock_job.assert_called_once()
+    mock_fast.assert_not_called()
+    mock_recover.assert_not_called()
+
+
+def test_run_job_uses_fast_job_in_fast_mode(scanner: Scanner, mocker: MockerFixture):
+    mocker.patch.object(scanner, "_recover_captcha")
+    mocker.patch.object(scanner, "_fast_mode_active", return_value=True)
+    mock_job = mocker.patch.object(scanner, "_job")
+    mock_fast = mocker.patch.object(scanner, "_fast_job")
+
+    scanner._run_job()
+
+    mock_fast.assert_called_once()
+    mock_job.assert_not_called()

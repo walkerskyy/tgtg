@@ -1,8 +1,8 @@
 import logging
+import random
 import sys
 from datetime import datetime
 from pathlib import Path
-from random import random
 from time import sleep
 from typing import Any, NoReturn
 
@@ -230,9 +230,34 @@ class Scanner:
         return False
 
     def _next_sleep_time(self) -> float:
+        if self.tgtg_client.captcha is not None:
+            cooldown = self.config.tgtg.captcha_cooldown
+            if cooldown <= 0:
+                log.warning("Invalid CaptchaCooldown %s - using default 600", cooldown)
+                cooldown = 600
+            return cooldown * random.uniform(0.9, 1.1)
         if self.config.reservation.fast_poll and self._fast_mode_active():
-            return 8.0 + 4.0 * random()
-        return self.config.sleep_time * (0.9 + 0.2 * random())
+            return 8.0 + 4.0 * random.random()
+        return self.config.sleep_time * (0.9 + 0.2 * random.random())
+
+    def _run_job(self) -> None:
+        """Run one cycle: captcha recovery while blocked, otherwise fast or normal job."""
+        if self.tgtg_client.captcha is not None:
+            self._recover_captcha()
+            return
+        try:
+            fast = self.config.reservation.fast_poll and self._fast_mode_active()
+        except Exception:
+            log.warning("Failed to evaluate fast mode - using normal cycle")
+            fast = False
+        if fast:
+            self._fast_job()
+        else:
+            self._job()
+
+    def _recover_captcha(self) -> None:
+        """Handle a pending DataDome challenge: probe for a recovered cookie, else back off."""
+        raise NotImplementedError("captcha recovery wired in the next task")
 
     def _fast_job(self) -> None:
         """Reduced cycle while fast mode is active."""
@@ -345,15 +370,7 @@ class Scanner:
                     log.info("Scanner reenabled by cron schedule.")
                     running = True
                 try:
-                    try:
-                        fast = self.config.reservation.fast_poll and self._fast_mode_active()
-                    except Exception:
-                        log.warning("Failed to evaluate fast mode - using normal cycle")
-                        fast = False
-                    if fast:
-                        self._fast_job()
-                    else:
-                        self._job()
+                    self._run_job()
                 except Exception:
                     log.error("Job Error! - %s", sys.exc_info())
                 finally:
@@ -361,7 +378,7 @@ class Scanner:
                         sleep_time = self._next_sleep_time()
                     except Exception:
                         log.warning("Failed to compute next sleep time - using default")
-                        sleep_time = self.config.sleep_time * (0.9 + 0.2 * random())
+                        sleep_time = self.config.sleep_time * (0.9 + 0.2 * random.random())
                     steps = max(int(sleep_time), 1)
                     for _ in range(steps):
                         activity.next()
