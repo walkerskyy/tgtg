@@ -2,6 +2,7 @@
 
 import json
 import pathlib
+from datetime import datetime, timezone
 from os import getenv
 from typing import Any
 from urllib.parse import urljoin
@@ -12,6 +13,7 @@ import tgtg
 from pytest_mock.plugin import MockerFixture
 from tgtg.exceptions import TgtgAPIError
 
+from tgtg_scanner.captcha import CaptchaChallenge
 from tgtg_scanner.models import Config
 from tgtg_scanner.tgtg_client import TgtgClient, extract_datadome, normalize_cookie, resolve_user_agent
 
@@ -429,3 +431,67 @@ def test_get_order_detail():
         "total_price": {"currency": "AUD", "decimals": 2, "minor_units": 850},
     }
     assert responses.calls[1].request.method == "POST"
+
+
+@responses.activate
+def test_post_interstitial_sets_captcha_state_once():
+    _datadome_sdk()
+    url = urljoin(BASE_URL, tgtg.API_BUCKET_ENDPOINT)
+    for _ in range(2):
+        responses.add(
+            responses.POST,
+            url,
+            status=403,
+            body='{"url":"https://geo.captcha-delivery.com/interstitial/abc"}',
+        )
+    client = TgtgClient(
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+
+    with pytest.raises(TgtgAPIError):
+        client.get_favorites()
+    assert client.captcha is not None
+    assert "captcha-delivery.com" in client.captcha.url
+    first_seen = client.captcha.first_seen
+
+    with pytest.raises(TgtgAPIError):
+        client.get_favorites()
+    assert client.captcha.first_seen == first_seen  # same episode - not reset
+
+
+@responses.activate
+def test_post_success_clears_captcha_state():
+    _datadome_sdk()
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, tgtg.API_BUCKET_ENDPOINT),
+        json={"mobile_bucket": {"items": []}},
+        status=200,
+    )
+    client = TgtgClient(
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+    client.captcha = CaptchaChallenge(url="https://geo.captcha-delivery.com/x", first_seen=datetime.now(timezone.utc))
+
+    assert client.get_favorites() == []
+    assert client.captcha is None
+
+
+def test_apply_datadome_sets_session_cookie():
+    client = TgtgClient(
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.apply_datadome("datadome=newtok; Path=/")
+    assert client.cookie == "datadome=newtok"
+    assert any(c.name == "datadome" and c.value == "newtok" for c in client.session.cookies)

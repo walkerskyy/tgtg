@@ -8,12 +8,9 @@ from __future__ import annotations
 
 import builtins
 import contextlib
-import json
 import logging
-import re
-import sys
-import webbrowser
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from http import HTTPStatus
 
 import tgtg
@@ -21,11 +18,10 @@ from tgtg import BASE_URL
 from tgtg import TgtgClient as _UpstreamTgtgClient
 from tgtg.exceptions import TgtgAPIError
 
+from tgtg_scanner.captcha import DATADOME_RE, CaptchaChallenge, captcha_url_from_response, normalize_datadome_value
 from tgtg_scanner.pin_prompt import prompt_via_browser
 
 log = logging.getLogger("tgtg")
-
-_DATADOME_RE = re.compile(r"datadome=([^;]+)", re.IGNORECASE)
 
 # App-shaped supported payment methods (decompiled from APK 26.10.0, matches PaymentType enum).
 DEFAULT_SUPPORTED_TYPES: list[dict] = [
@@ -70,7 +66,7 @@ def extract_datadome(client: _UpstreamTgtgClient) -> str:
     if values:
         return values[-1]
     if client.cookie:
-        match = _DATADOME_RE.search(client.cookie)
+        match = DATADOME_RE.search(client.cookie)
         if match:
             return match.group(1)
         if "=" not in client.cookie:
@@ -110,6 +106,7 @@ class TgtgClient(_UpstreamTgtgClient):
         **kwargs,
     ) -> None:
         self.pin_port = pin_port
+        self.captcha: CaptchaChallenge | None = None
         if max_polling_tries is not None:
             tgtg.MAX_POLLING_TRIES = max_polling_tries
         if polling_wait_time is not None:
@@ -133,77 +130,38 @@ class TgtgClient(_UpstreamTgtgClient):
             super().start_polling(polling_id)
 
     def _post(self, url, **kwargs):
-        """POST with DataDome captcha fallback.
+        """POST via upstream (SDK cookie + one retry), tracking DataDome captcha challenges.
 
-        First try upstream's SDK cookie approach. If that still returns 403
-        with a DataDome interstitial, open the captcha in the browser and
-        prompt the user to paste the fresh datadome cookie.
+        On an interstitial this records ``self.captcha`` (once per episode) and returns
+        the 403 unchanged - recovery is the scanner's job and the scan loop never blocks.
         """
-        # Upstream _post: ensure SDK cookie, POST, on 403 clear + retry once
         response = super()._post(url, **kwargs)
-        if response.status_code != 403:
+        captcha_url = captcha_url_from_response(response)
+        if captcha_url is None:
+            self.captcha = None
             return response
+        if self.captcha is None:
+            self.captcha = CaptchaChallenge(url=captcha_url, first_seen=datetime.now(timezone.utc))
+            log.warning(
+                "DataDome captcha challenge - solve it in your browser; the scanner will pick up the fresh cookie:\n  %s",
+                captcha_url,
+            )
+        return response
 
-        # Check if it's a DataDome captcha interstitial
-        try:
-            body = response.json()
-            captcha_url = body.get("url", "")
-        except (json.JSONDecodeError, AttributeError):
-            return response
-
-        if "captcha-delivery.com" not in captcha_url:
-            return response
-
-        # DataDome captcha detected — try to open in browser
-        log.warning("DataDome captcha challenge received.")
-        try:
-            webbrowser.open(captcha_url)
-            log.info("Opened captcha in browser. If it didn't open, visit:\n  %s", captcha_url)
-        except Exception:
-            log.warning("Could not open browser. Please visit this URL manually:\n  %s", captcha_url)
-
-        # Prompt user for the datadome cookie
-        if not sys.stdin.isatty():
-            log.warning("Non-interactive session — cannot prompt for datadome cookie.")
-            return response
-
-        sys.stdout.write(
-            "Solve the captcha, then copy the 'datadome' cookie value "
-            "from your browser (e.g. via DevTools → Application → Cookies) "
-            "and paste it here:\n> "
-        )
-        sys.stdout.flush()
-        try:
-            fresh_cookie = sys.stdin.readline().strip()
-        except (EOFError, KeyboardInterrupt):
-            return response
-
-        if not fresh_cookie:
-            return response
-
-        # Strip wrapping if user pasted full "datadome=xxx" or "datadome=xxx; ..."
-        match = _DATADOME_RE.search(fresh_cookie)
-        if match:
-            fresh_cookie = match.group(1)
-
+    def apply_datadome(self, value: str) -> None:
+        """Set a fresh datadome cookie on the session (bare token or Cookie-header form)."""
+        bare = normalize_datadome_value(value)
+        if not bare:
+            return
         domain = tgtg.urlsplit(self.base_url).hostname
         self.session.cookies.set(
             "datadome",
-            fresh_cookie,
+            bare,
             domain=f".{domain}",
             path="/",
             secure=True,
         )
-        self.cookie = f"datadome={fresh_cookie}"
-
-        # Retry the request with the fresh cookie
-        return self.session.post(
-            url,
-            headers=self._headers,
-            proxies=self.proxies,
-            timeout=self.timeout,
-            **kwargs,
-        )
+        self.cookie = f"datadome={bare}"
 
     def get_favorites(self, **kwargs) -> list[dict]:
         """Fetch all favorites via upstream paging (page_size 100)."""
