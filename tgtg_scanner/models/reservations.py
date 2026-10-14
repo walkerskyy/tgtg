@@ -515,8 +515,17 @@ class Reservations:
             ):
                 if self._check_payment(order, order_id, events):
                     changed = True
-            if self._run_due_retry(order, order_id, state, now, events):
+            try:
+                if self._run_due_retry(order, order_id, state, now, events):
+                    changed = True
+            except Exception as exc:
+                order.pay_retry_at = now + 15
                 changed = True
+                log.warning(
+                    "PAYRETRY executor failed for order %s: %s - re-arming retry in 15s",
+                    order_id,
+                    exc,
+                )
         if any(o.status == "CONFIRMED" for o in self.active_orders.values()):
             if self._prune_collected_orders():
                 changed = True

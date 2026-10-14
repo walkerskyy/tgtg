@@ -1073,6 +1073,22 @@ def test_retry_executor_skips_repay_when_status_check_fails(reservations: Reserv
     assert 1 <= order.pay_retry_at - int(time.time()) <= 16
 
 
+def test_retry_executor_isolated_when_probe_raises(reservations: Reservations, mocker: MockerFixture):
+    order = _due_order()
+    reservations.active_orders["o1"] = order
+    order2 = _due_order(id="o2", pay_retry_at=int(time.time()) - 1)
+    reservations.active_orders["o2"] = order2
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "FAILED"}  # type: ignore[attr-defined]
+    mocker.patch.object(reservations, "_probe_payment", side_effect=RuntimeError("probe exploded"))
+    notified = reservations.process_active_orders()  # must not raise
+    assert notified == []
+    assert "o2" in reservations.active_orders
+    assert order.pay_retry_at is not None
+    assert 1 <= order.pay_retry_at - int(time.time()) <= 16
+    assert order.pay_attempts == 1  # attempt consumed before the probe raised
+
+
 def test_retry_executor_failure_reschedules_silently(reservations: Reservations, mocker: MockerFixture):
     order = _due_order(pay_attempts=0)
     reservations.active_orders["o1"] = order
