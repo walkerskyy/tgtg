@@ -106,7 +106,10 @@ The SDK auto-fetch (layer 1) is unchanged and still runs first via upstream `_po
     `self.captcha = CaptchaChallenge(url, now)` and log exactly one `WARNING` with the URL
     and the recovery instructions ("solve it in your browser; the scanner will pick up the
     cookie automatically"). Return the 403 response either way.
-  - Otherwise clear `self.captcha = None` and return the response.
+  - Otherwise, clear `self.captcha = None` only on a successful (2xx) non-interstitial
+    response, and return the response. A failed (4xx/5xx) non-interstitial response (e.g.
+    429/500/plain-403) keeps the pending challenge so the episode is not reset and the
+    warning is not re-fired.
 - `self.captcha: CaptchaChallenge | None = None` initialized in `__init__`.
 - New method `apply_datadome(value: str) -> None` — factored from the current lines
   189-197: normalize, set the session cookie for `.{base_url host}` with

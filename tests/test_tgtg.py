@@ -11,7 +11,7 @@ import pytest
 import responses
 import tgtg
 from pytest_mock.plugin import MockerFixture
-from tgtg.exceptions import TgtgAPIError
+from tgtg.exceptions import TgtgAPIError, TgtgLoginError
 
 from tgtg_scanner.captcha import CaptchaChallenge
 from tgtg_scanner.models import Config
@@ -177,6 +177,32 @@ def test_login_raises_when_refresh_fails_without_email():
     )
     with pytest.raises(TgtgAPIError):
         client.login()
+    assert client.captcha is not None  # challenge recorded on the refresh-403 path
+
+
+@responses.activate
+def test_login_poll_interstitial_records_challenge_without_stdin(mocker: MockerFixture):
+    """A datadome interstitial on the PIN-poll path raises TgtgLoginError and records the challenge."""
+    mocker.patch("tgtg_scanner.tgtg_client.prompt_via_browser", return_value="")
+    _datadome_sdk()
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, tgtg.AUTH_BY_EMAIL_ENDPOINT),
+        json={"state": "WAIT", "polling_id": "poll-1"},
+        status=200,
+    )
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, tgtg.AUTH_POLLING_ENDPOINT),
+        status=403,
+        body='{"url":"https://geo.captcha-delivery.com/interstitial/poll"}',
+    )
+    client = TgtgClient(email="test@example.com", user_agent="TGTG/test")
+
+    with pytest.raises(TgtgLoginError):
+        client.login()
+    assert client.captcha is not None
+    assert "captcha-delivery.com" in client.captcha.url
 
 
 @responses.activate
@@ -434,8 +460,9 @@ def test_get_order_detail():
 
 
 @responses.activate
-def test_post_interstitial_sets_captcha_state_once():
+def test_post_interstitial_sets_captcha_state_once(mocker: MockerFixture):
     _datadome_sdk()
+    warn = mocker.patch("tgtg_scanner.tgtg_client.log.warning")
     url = urljoin(BASE_URL, tgtg.API_BUCKET_ENDPOINT)
     for _ in range(2):
         responses.add(
@@ -457,10 +484,12 @@ def test_post_interstitial_sets_captcha_state_once():
     assert client.captcha is not None
     assert "captcha-delivery.com" in client.captcha.url
     first_seen = client.captcha.first_seen
+    assert warn.call_count == 1
 
     with pytest.raises(TgtgAPIError):
         client.get_favorites()
     assert client.captcha.first_seen == first_seen  # same episode - not reset
+    assert warn.call_count == 1  # warning fires once per episode, not per call
 
 
 @responses.activate
@@ -483,6 +512,30 @@ def test_post_success_clears_captcha_state():
 
     assert client.get_favorites() == []
     assert client.captcha is None
+
+
+@responses.activate
+def test_post_error_keeps_captcha_state():
+    """A failed non-interstitial response must not reset the pending episode."""
+    _datadome_sdk()
+    responses.add(
+        responses.POST,
+        urljoin(BASE_URL, tgtg.API_BUCKET_ENDPOINT),
+        status=500,
+        body="boom",
+    )
+    client = TgtgClient(
+        access_token="at",
+        refresh_token="rt",
+        cookie=normalize_cookie("dd"),
+        user_agent="TGTG/test",
+    )
+    client.login = lambda: None  # type: ignore[method-assign]
+    client.captcha = CaptchaChallenge(url="https://geo.captcha-delivery.com/x", first_seen=datetime.now(timezone.utc))
+
+    with pytest.raises(TgtgAPIError):
+        client.get_favorites()
+    assert client.captcha is not None  # still pending - episode not reset
 
 
 def test_apply_datadome_sets_session_cookie():

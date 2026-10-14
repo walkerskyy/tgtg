@@ -107,6 +107,7 @@ class TgtgClient(_UpstreamTgtgClient):
     ) -> None:
         self.pin_port = pin_port
         self.captcha: CaptchaChallenge | None = None
+        self.cookie: str | None
         if max_polling_tries is not None:
             tgtg.MAX_POLLING_TRIES = max_polling_tries
         if polling_wait_time is not None:
@@ -137,19 +138,25 @@ class TgtgClient(_UpstreamTgtgClient):
         """
         response = super()._post(url, **kwargs)
         captcha_url = captcha_url_from_response(response)
-        if captcha_url is None:
-            self.captcha = None
+        if captcha_url is not None:
+            if self.captcha is None:
+                self.captcha = CaptchaChallenge(url=captcha_url, first_seen=datetime.now(timezone.utc))
+                log.warning(
+                    "DataDome captcha challenge - solve it in your browser; "
+                    "the scanner will pick up the fresh cookie automatically:\n  %s",
+                    captcha_url,
+                )
             return response
-        if self.captcha is None:
-            self.captcha = CaptchaChallenge(url=captcha_url, first_seen=datetime.now(timezone.utc))
-            log.warning(
-                "DataDome captcha challenge - solve it in your browser; the scanner will pick up the fresh cookie:\n  %s",
-                captcha_url,
-            )
+        if response.status_code < 400 and self.captcha is not None:
+            self.captcha = None
         return response
 
     def apply_datadome(self, value: str) -> None:
-        """Set a fresh datadome cookie on the session (bare token or Cookie-header form)."""
+        """Set a fresh datadome cookie on the session (bare token or Cookie-header form).
+
+        The value is written to the session jar (for presence checks and token
+        persistence) and to the Cookie header that is actually sent.
+        """
         bare = normalize_datadome_value(value)
         if not bare:
             return
