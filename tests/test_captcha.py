@@ -96,7 +96,13 @@ def test_read_inbox_empty_file(tmp_path: Path):
     assert read_inbox_datadome(inbox) is None
 
 
-def test_read_inbox_garbage_bytes_still_returns_string(tmp_path: Path):
+def test_read_inbox_garbage_bytes_rejected(tmp_path: Path):
     inbox = tmp_path / "datadome_in"
     inbox.write_bytes(b"\x00\x01abc")
-    assert read_inbox_datadome(inbox) == "\x00\x01abc"
+    assert read_inbox_datadome(inbox) is None
+
+
+def test_read_inbox_strips_utf8_bom(tmp_path: Path):
+    inbox = tmp_path / "datadome_in"
+    inbox.write_bytes(b"\xef\xbb\xbffreshcookie")
+    assert read_inbox_datadome(inbox) == "freshcookie"

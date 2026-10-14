@@ -60,8 +60,12 @@ def read_inbox_datadome(path: Path) -> str | None:
     try:
         if not path.is_file():
             return None
-        raw = path.read_text(encoding="utf-8", errors="replace")
+        raw = path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError as exc:
         log.warning("Could not read captcha inbox %s: %s", path, exc)
         return None
-    return normalize_datadome_value(raw)
+    value = normalize_datadome_value(raw)
+    if value is not None and any(ord(ch) < 0x20 or ord(ch) == 0x7F or ch == "\ufffd" for ch in value):
+        log.warning("Captcha inbox %s does not contain a plausible datadome cookie - ignoring", path)
+        return None
+    return value
