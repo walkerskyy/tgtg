@@ -53,7 +53,8 @@ Replace the blocking stdin prompt with a **non-blocking, layered recovery**:
      (`printf '%s' '<cookie>' > tokens/datadome_in`). Fallback when no browser read is
      possible (headless box with an SSH'd browser elsewhere, locked keyring, etc.).
 4. A candidate cookie is applied to the session and verified with one cheap API call
-   (`get_favorites(page_size=1)`). Success → pending state cleared, tokens persisted, inbox
+   (`get_favorites()` — the client's paged override; one HTTP call for a typical
+   favorites list). Success → pending state cleared, tokens persisted, inbox
    file consumed, scanning resumes at normal cadence. Failure → stay pending until next
    cooldown.
 
@@ -123,7 +124,7 @@ The SDK auto-fetch (layer 1) is unchanged and still runs first via upstream `_po
      "datadome_in")` when `token_path` is configured.
   2. If no candidate, or candidate equals the cookie already in the session → `log.debug`
      "still waiting for captcha solve" and return.
-  3. `apply_datadome(candidate)`; probe with `self.tgtg_client.get_favorites(page_size=1)`.
+  3. `apply_datadome(candidate)`; probe with `self.tgtg_client.get_favorites()`.
      - Probe succeeds (no `TgtgAPIError`): `self.tgtg_client.captcha = None`,
        `self._save_tokens()`, delete the inbox file if it was the source, `log.info`
        "Datadome captcha recovered — resuming normal scanning".
@@ -171,7 +172,7 @@ Scanner run loop: challenge pending?
         └─ yes → sleep(cooldown) … _recover_captcha():
                   1. browser_cookie3 jar  → datadome value?
                   2. else token_path/datadome_in
-                  3. apply_datadome + get_favorites(page_size=1) probe
+                  3. apply_datadome + get_favorites() probe
                      ├─ ok  → clear pending, save_tokens, consume inbox, resume
                      └─ fail → stay pending, next cooldown probe
 ```
