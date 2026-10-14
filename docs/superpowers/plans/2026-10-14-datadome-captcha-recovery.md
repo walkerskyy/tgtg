@@ -208,10 +208,10 @@ def test_read_inbox_empty_file(tmp_path: Path):
     assert read_inbox_datadome(inbox) is None
 
 
-def test_read_inbox_garbage_bytes_still_returns_string(tmp_path: Path):
+def test_read_inbox_garbage_bytes_rejected(tmp_path: Path):
     inbox = tmp_path / "datadome_in"
     inbox.write_bytes(b"\x00\x01abc")
-    assert read_inbox_datadome(inbox) == "\x00\x01abc"
+    assert read_inbox_datadome(inbox) is None
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -229,11 +229,15 @@ def read_inbox_datadome(path: Path) -> str | None:
     try:
         if not path.is_file():
             return None
-        raw = path.read_text(encoding="utf-8", errors="replace")
+        raw = path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError as exc:
         log.warning("Could not read captcha inbox %s: %s", path, exc)
         return None
-    return normalize_datadome_value(raw)
+    value = normalize_datadome_value(raw)
+    if value is not None and any(ord(ch) < 0x20 or ord(ch) == 0x7F or ch == "\ufffd" for ch in value):
+        log.warning("Captcha inbox %s does not contain a plausible datadome cookie - ignoring", path)
+        return None
+    return value
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
