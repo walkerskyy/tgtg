@@ -1352,6 +1352,52 @@ def test_retry_settled_payment_clears_auth_url(reservations: Reservations, mocke
     assert order.auth_url is None
 
 
+def test_terminal_state_clears_stale_auth_url(reservations: Reservations):
+    now = int(time.time())
+    reservations.active_orders["o1"] = Order(
+        "o1",
+        "123",
+        1,
+        "Bakery",
+        status=PAYMENT_ACTION_REQUIRED,
+        created_at=now,
+        auth_url="https://bank.example/3ds",
+    )
+    reservations.client.get_order_status.return_value = {"state": "EXPIRED"}  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert [o.status for o in notified] == ["EXPIRED"]
+    assert notified[0].auth_url is None
+
+
+def test_deleted_order_clears_stale_auth_url(reservations: Reservations):
+    now = int(time.time())
+    reservations.active_orders["o1"] = Order(
+        "o1",
+        "123",
+        1,
+        "Bakery",
+        status=PAYMENT_ACTION_REQUIRED,
+        created_at=now,
+        auth_url="https://bank.example/3ds",
+    )
+    reservations.client.get_order_status.side_effect = TgtgAPIError(410, b'{"errors":[{"code":"ENTITY_DELETED"}]}')  # type: ignore[attr-defined]
+    notified = reservations.process_active_orders()
+    assert [o.status for o in notified] == ["DELETED"]
+    assert notified[0].auth_url is None
+
+
+def test_retry_probe_success_clears_stale_auth_url(reservations: Reservations, mocker: MockerFixture):
+    """A successful re-pay starts a fresh payment; any prior 3DS URL is dead."""
+    order = _due_order(auth_url="https://bank.example/3ds")
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {"state": "FAILED"}  # type: ignore[attr-defined]
+    mocker.patch.object(reservations, "_probe_payment", return_value=True)
+    reservations.process_active_orders()
+    assert order.status == "PAYMENT_INITIATED"
+    assert order.auth_url is None
+
+
 def test_action_required_realert_fires_when_never_alerted(reservations: Reservations, mocker: MockerFixture):
     """action_alerted_at is None -> due_at is 0, so the alert fires immediately."""
     now = int(time.time())

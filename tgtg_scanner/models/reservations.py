@@ -458,6 +458,7 @@ class Reservations:
                 if exc.args and exc.args[0] == 410:
                     log.info("Order %s no longer exists (entity deleted) - removing from ledger", order_id)
                     order.status = "DELETED"
+                    order.auth_url = None  # dead order: never forward a leftover bank link
                     events.append(order)
                     self.active_orders.pop(order_id, None)
                     changed = True
@@ -513,6 +514,7 @@ class Reservations:
                 if state in TERMINAL_STATES:
                     log.info("Order %s entered terminal state %s for %s", order_id, state, order.display_name)
                     order.status = state
+                    order.auth_url = None  # terminal: never forward a leftover bank link
                     events.append(order)
                     self.active_orders.pop(order_id, None)
                     changed = True
@@ -626,6 +628,7 @@ class Reservations:
         log.info("PAYRETRY attempt %d for order %s (%s)", order.pay_attempts, order_id, order.display_name)
         if self._probe_payment(order_id, order.item_id, order.display_name):
             order.status = "PAYMENT_INITIATED"
+            order.auth_url = None  # fresh pay attempt: any prior 3DS URL is dead
             log.info("PAYRETRY pay accepted for order %s - watching for PAID", order_id)
             return True
         return self._handle_payment_failure(
