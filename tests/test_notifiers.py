@@ -209,6 +209,33 @@ def test_console(
     assert captured.out.rstrip() == f"{test_item.display_name} - new amount: {test_item.items_available}"
 
 
+def test_console_reservation_auth_url(
+    reservations: Reservations,
+    favorites: Favorites,
+    capsys: pytest.CaptureFixture,
+):
+    from tgtg_scanner.models.reservations import PAYMENT_ACTION_REQUIRED, Reservation
+
+    config = Config()
+    config.console.enabled = True
+    config.console.cron = Cron()
+    console = Console(config, reservations, favorites)
+
+    console._send(
+        Reservation(
+            item_id="i",
+            amount=1,
+            display_name="Bakery",
+            status=PAYMENT_ACTION_REQUIRED,
+            auth_url="https://bank.example/3ds",
+        )
+    )
+    assert "https://bank.example/3ds" in capsys.readouterr().out
+
+    console._send(Reservation(item_id="i", amount=1, display_name="Bakery", status="reserved"))
+    assert "Bank verification" not in capsys.readouterr().out
+
+
 def test_script(
     test_item: Item,
     reservations: Reservations,
@@ -407,7 +434,7 @@ def test_reservation_text_payment_failed():
     assert "TGTG app" in text
     assert "auto-retry" in text
     text2 = Telegram._reservation_text(Reservation("123", 1, "Bakery Bag", status=PAYMENT_ACTION_REQUIRED))
-    assert "verification" in text2
+    assert "verification" in text2.lower()
     assert "TGTG app" in text2
 
 

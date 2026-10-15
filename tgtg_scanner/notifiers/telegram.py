@@ -231,12 +231,21 @@ class Telegram(Notifier):
         if item.status == PAYMENT_FAILED:
             return f"{item.display_name} PAYMENT FAILED - auto-retry running; open the TGTG app now if it keeps failing"
         if item.status == PAYMENT_ACTION_REQUIRED:
-            return f"{item.display_name} payment needs verification - open the TGTG app to approve it"
+            base = f"{item.display_name} BANK VERIFICATION REQUIRED - complete it now or the bag is lost"
+            if item.auth_url:
+                return f"{base}\nOpen: {item.auth_url}"
+            return f"{base}\n(no link captured - check the TGTG app and your banking app)"
         if item.status == UNPAID_WARNING:
             return f"{item.display_name} RESERVED BUT UNPAID - open the TGTG app now, hold expires soon"
         if item.status and item.status != "reserved":
             return f"{item.display_name} order status: {item.status}"
         return f"{item.display_name} is reserved for 5 minutes"
+
+    @staticmethod
+    def _reservation_reply_markup(item: Reservation) -> InlineKeyboardMarkup | None:
+        if item.status == PAYMENT_ACTION_REQUIRED and item.auth_url:
+            return InlineKeyboardMarkup([[InlineKeyboardButton("Complete bank verification", url=item.auth_url)]])
+        return None
 
     async def _send(self, item: Item | Reservation) -> None:  # type: ignore[override]
         """Send item information as Telegram message.
@@ -248,22 +257,27 @@ class Telegram(Notifier):
             log.info("Reactivated Telegram Notifications")
             self.mute = None
         image = None
+        reply_markup = None
         if isinstance(item, Item) and not self.only_reservations and not self.mute:
             message = self._unmask(self.body, item)
             if self.image:
                 image = self._unmask_image(self.image, item)
         elif isinstance(item, Reservation):
             message = escape_markdown(self._reservation_text(item), version=2)
+            reply_markup = self._reservation_reply_markup(item)
         else:
             return
-        await self._send_message(message, image)
+        await self._send_message(message, image, reply_markup)
 
-    async def _send_message(self, message: str, image: bytes | None = None) -> None:
+    async def _send_message(
+        self, message: str, image: bytes | None = None, reply_markup: InlineKeyboardMarkup | None = None
+    ) -> None:
         log.debug("%s message: %s", self.name, message)
         fmt = ParseMode.MARKDOWN_V2
         for chat_id in self.chat_ids:
             try:
                 if image:
+                    # photo captions cannot carry inline keyboards reliably - text-only for challenges
                     await self.application.bot.send_photo(chat_id=chat_id, photo=image, caption=message, parse_mode=fmt)
                 else:
                     await self.application.bot.send_message(
@@ -271,6 +285,7 @@ class Telegram(Notifier):
                         text=message,
                         parse_mode=fmt,
                         disable_web_page_preview=True,
+                        reply_markup=reply_markup,
                     )
                 self.retries = 0
             except BadRequest as err:
@@ -283,7 +298,7 @@ class Telegram(Notifier):
                 self.retries += 1
                 if self.retries > Telegram.MAX_RETRIES:
                     raise err
-                await self._send_message(message)
+                await self._send_message(message, image, reply_markup)
             except TelegramError as err:
                 log.error("Telegram Error: %s", err)
 

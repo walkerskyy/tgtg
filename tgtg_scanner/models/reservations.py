@@ -474,6 +474,7 @@ class Reservations:
             if state in ("CONFIRMED", "PAID"):
                 if order.status != state:
                     order.status = state
+                    order.auth_url = None  # settled: never forward a leftover bank link
                     changed = True
                     events.append(order)
                     if state == "PAID":
@@ -610,6 +611,7 @@ class Reservations:
                 pstate = res.get("state") if isinstance(res, dict) else None
                 if pstate in PAYMENT_SETTLED_STATES:
                     order.status = "PAYMENT_INITIATED"
+                    order.auth_url = None  # settled: drop stale bank link
                     log.info("PAYRETRY payment for order %s already settled (%s) - not re-paying", order_id, pstate)
                     return True
             except Exception as exc:

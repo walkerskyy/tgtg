@@ -27,6 +27,8 @@ class Console(Notifier):
         if isinstance(item, Item):
             message = item.unmask(self.body)
             print(message)
+        elif isinstance(item, Reservation) and getattr(item, "auth_url", None):
+            print(f"Bank verification: {item.auth_url}")
 
     def __repr__(self) -> str:
         return "Console stdout"

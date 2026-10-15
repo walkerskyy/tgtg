@@ -1,4 +1,6 @@
-from tgtg_scanner.models.reservations import UNPAID_WARNING, Reservation
+from telegram import InlineKeyboardMarkup
+
+from tgtg_scanner.models.reservations import PAYMENT_ACTION_REQUIRED, UNPAID_WARNING, Reservation
 from tgtg_scanner.notifiers.telegram import Telegram
 
 
@@ -69,3 +71,42 @@ def test_orders_menu_only_confirmed_shows_empty():
     asyncio.run(telegram._cancel_orders_menu(update, None))
 
     update.message.reply_text.assert_called_once_with("No cancelable Orders")
+
+
+def test_action_required_text_includes_url():
+    r = Reservation(
+        item_id="i",
+        amount=1,
+        display_name="Bakery",
+        status=PAYMENT_ACTION_REQUIRED,
+        auth_url="https://bank.example/3ds",
+    )
+    text = Telegram._reservation_text(r)
+    assert "verification" in text.lower() or "bank" in text.lower()
+    assert "https://bank.example/3ds" in text
+
+
+def test_action_required_text_without_url():
+    r = Reservation(item_id="i", amount=1, display_name="Bakery", status=PAYMENT_ACTION_REQUIRED)
+    text = Telegram._reservation_text(r)
+    assert "verification" in text.lower() or "bank" in text.lower()
+    assert "(no link captured" in text
+
+
+def test_reservation_reply_markup_has_url_button():
+    r = Reservation(
+        item_id="i",
+        amount=1,
+        display_name="Bakery",
+        status=PAYMENT_ACTION_REQUIRED,
+        auth_url="https://bank.example/3ds",
+    )
+    markup = Telegram._reservation_reply_markup(r)
+    assert isinstance(markup, InlineKeyboardMarkup)
+    button = markup.inline_keyboard[0][0]
+    assert button.url == "https://bank.example/3ds"
+
+
+def test_reservation_reply_markup_none_without_url():
+    r = Reservation(item_id="i", amount=1, display_name="Bakery", status="reserved")
+    assert Telegram._reservation_reply_markup(r) is None
