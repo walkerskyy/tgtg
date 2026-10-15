@@ -341,7 +341,15 @@ class Scanner:
 
     def _notify_order_event(self, order: Order) -> None:
         if self.notifiers:
-            self.notifiers.send(ReservationObj(order.item_id, order.amount, order.display_name, status=order.status))
+            self.notifiers.send(
+                ReservationObj(
+                    order.item_id,
+                    order.amount,
+                    order.display_name,
+                    status=order.status,
+                    auth_url=order.auth_url,
+                )
+            )
 
     def _attempt_reservation(self, item: Item) -> None:
         reservation = self.reservations.get_reservation(item.item_id)

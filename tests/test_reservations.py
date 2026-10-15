@@ -32,6 +32,17 @@ def reservations():
     return Reservations(mock_client)
 
 
+def test_reservation_carries_auth_url():
+    res_obj = Reservation(
+        item_id="i",
+        amount=1,
+        display_name="Bakery",
+        status=PAYMENT_ACTION_REQUIRED,
+        auth_url="https://bank.example/3ds",
+    )
+    assert res_obj.auth_url == "https://bank.example/3ds"
+
+
 def test_reserve(reservations: Reservations):
     reservations.reserve("123", "Test Item")
     assert len(reservations.reservation_query) == 1

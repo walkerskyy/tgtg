@@ -208,6 +208,25 @@ def test_process_order_events_sends_reservation_notifications(scanner: Scanner, 
     assert sent.display_name == "Bakery"
 
 
+def test_notify_order_event_passes_auth_url(scanner: Scanner, mocker: MockerFixture):
+    from tgtg_scanner.models.reservations import Order
+
+    scanner.notifiers = mocker.MagicMock()
+    send = mocker.patch.object(scanner.notifiers, "send")
+    order = Order(
+        id="o5",
+        item_id="i1",
+        amount=1,
+        display_name="Bakery",
+        status="PAYMENT_ACTION_REQUIRED",
+        auth_url="https://bank.example/3ds",
+    )
+    scanner._notify_order_event(order)
+    sent_obj = send.call_args[0][0]
+    assert sent_obj.auth_url == "https://bank.example/3ds"
+    assert sent_obj.status == "PAYMENT_ACTION_REQUIRED"
+
+
 def test_job_calls_process_order_events(scanner: Scanner, mocker: MockerFixture):
     mocker.patch.object(scanner, "_load_items", return_value=[])
     mocker.patch.object(scanner, "_process_items")

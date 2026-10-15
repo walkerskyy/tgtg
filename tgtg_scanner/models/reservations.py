@@ -184,6 +184,7 @@ class Reservation:
     display_name: str
     schedule: Schedule | None = None
     status: str | None = None
+    auth_url: str | None = None
 
 
 def _reservation_from_dict(data: dict) -> Reservation:
@@ -193,6 +194,7 @@ def _reservation_from_dict(data: dict) -> Reservation:
         display_name=data.get("display_name", ""),
         schedule=Schedule.parse(data.get("schedule")),
         status=data.get("status"),
+        auth_url=data.get("auth_url"),
     )
 
 
