@@ -9,7 +9,7 @@ from typing import Any, NoReturn
 from progress.spinner import Spinner
 
 from tgtg_scanner.captcha import read_browser_datadome, read_inbox_datadome
-from tgtg_scanner.errors import TgtgAPIError
+from tgtg_scanner.errors import TgtgAPIError, TgtgLoginError
 from tgtg_scanner.models import (
     Config,
     Cron,
@@ -390,10 +390,18 @@ class Scanner:
         self.notifiers.send(item)
 
     def _login_or_reauth(self) -> None:
-        """Login to TGTG API. If token refresh fails and email is configured, re-authenticate."""
+        """Login to TGTG API. If token refresh fails and email is configured, re-authenticate.
+
+        A DataDome captcha challenge recorded by the client defers to the run loop's
+        cooldown recovery instead of crashing or wiping still-valid tokens.
+        """
         try:
             self.tgtg_client.login()
-        except TgtgAPIError as err:
+        except (TgtgAPIError, TgtgLoginError) as err:
+            if self._captcha_defers_login():
+                return
+            if not isinstance(err, TgtgAPIError):
+                raise
             if not self.tgtg_client.email:
                 log.error("Token refresh failed and no email configured for re-authentication: %s", err)
                 raise
@@ -402,8 +410,34 @@ class Scanner:
             self.tgtg_client.refresh_token = None
             self.tgtg_client.cookie = None
             self.tgtg_client.session.cookies.clear()
-            self.tgtg_client.login()
+            try:
+                self.tgtg_client.login()
+            except (TgtgAPIError, TgtgLoginError):
+                if self._captcha_defers_login():
+                    return
+                raise
         self._save_tokens()
+
+    def _captcha_defers_login(self) -> bool:
+        """True while a login failure is a pending DataDome challenge: the run loop recovers it."""
+        challenge = self.tgtg_client.captcha
+        if challenge is None:
+            return False
+        log.warning(
+            "Login deferred - DataDome captcha recovery pending; the run loop will retry automatically (solve: %s)",
+            challenge.url,
+        )
+        return True
+
+    def _send_startup_test_notification(self) -> None:
+        """Send the startup test notification; skip while disabled or captcha recovery is pending."""
+        if self.config.disable_tests or self.notifiers is None or self.notifiers.notifier_count == 0:
+            return
+        if self.tgtg_client.captcha is not None:
+            log.warning("Skipping test notification - DataDome captcha recovery pending")
+            return
+        log.info("Sending test Notifications ...")
+        self.notifiers.send(self._get_test_item())
 
     def run(self) -> NoReturn:
         """Main Loop of the Scanner."""
@@ -420,9 +454,7 @@ class Scanner:
             self.metrics.enable_metrics()
         self.notifiers = Notifiers(self.config, self.reservations, self.favorites)
         self.notifiers.start()
-        if not self.config.disable_tests and self.notifiers.notifier_count > 0:
-            log.info("Sending test Notifications ...")
-            self.notifiers.send(self._get_test_item())
+        self._send_startup_test_notification()
         # start scanner
         log.info("Scanner started ...")
         running = True

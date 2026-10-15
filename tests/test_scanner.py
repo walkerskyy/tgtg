@@ -6,7 +6,7 @@ import pytest
 from pytest_mock.plugin import MockerFixture
 
 from tgtg_scanner.captcha import CaptchaChallenge
-from tgtg_scanner.errors import TgtgAPIError
+from tgtg_scanner.errors import TgtgAPIError, TgtgLoginError
 from tgtg_scanner.models import Config, Item
 from tgtg_scanner.models.schedule import Schedule
 from tgtg_scanner.scanner import Scanner
@@ -77,6 +77,118 @@ def test_login_no_reauth_without_email(scanner: Scanner, mocker: MockerFixture):
 
     with pytest.raises(TgtgAPIError):
         scanner._login_or_reauth()
+
+
+def _pending_challenge() -> CaptchaChallenge:
+    return CaptchaChallenge(
+        url="https://geo.captcha-delivery.com/interstitial/abc",
+        first_seen=datetime.now(timezone.utc),
+    )
+
+
+def test_login_refresh_blocked_by_captcha_defers_without_wiping_tokens(scanner: Scanner, mocker: MockerFixture):
+    """A DataDome-blocked refresh must not wipe tokens or force email re-auth - the run loop recovers."""
+    scanner.tgtg_client.captcha = _pending_challenge()
+    scanner.tgtg_client.access_token = "test_token"
+    scanner.tgtg_client.refresh_token = "test_refresh"
+    scanner.tgtg_client.email = "test@example.com"
+    login_mock = mocker.patch.object(
+        scanner.tgtg_client,
+        "login",
+        side_effect=TgtgAPIError(403, b'{"url":"https://geo.captcha-delivery.com/interstitial/abc"}'),
+    )
+    save_mock = mocker.patch.object(scanner, "_save_tokens")
+
+    scanner._login_or_reauth()
+
+    assert login_mock.call_count == 1  # no destructive re-auth attempt
+    assert scanner.tgtg_client.access_token == "test_token"
+    assert scanner.tgtg_client.refresh_token == "test_refresh"
+    save_mock.assert_not_called()
+
+
+def test_login_email_flow_blocked_by_captcha_does_not_crash(scanner: Scanner, mocker: MockerFixture):
+    """TgtgLoginError from a captcha-blocked email login defers to recovery instead of killing startup."""
+    scanner.tgtg_client.captcha = _pending_challenge()
+    scanner.tgtg_client.email = "test@example.com"
+    mocker.patch.object(
+        scanner.tgtg_client,
+        "login",
+        side_effect=TgtgLoginError(403, b'{"url":"https://geo.captcha-delivery.com/interstitial/abc"}'),
+    )
+
+    scanner._login_or_reauth()  # must not raise
+
+
+def test_login_email_flow_failure_without_captcha_propagates(scanner: Scanner, mocker: MockerFixture):
+    """A non-captcha TgtgLoginError still propagates."""
+    scanner.tgtg_client.captcha = None
+    scanner.tgtg_client.email = "test@example.com"
+    mocker.patch.object(scanner.tgtg_client, "login", side_effect=TgtgLoginError(403, b"bad request"))
+
+    with pytest.raises(TgtgLoginError):
+        scanner._login_or_reauth()
+
+
+def test_reauth_second_login_blocked_by_captcha_defers(scanner: Scanner, mocker: MockerFixture):
+    """Captcha appearing during the post-wipe email login must not crash either."""
+    scanner.tgtg_client.captcha = None
+    scanner.tgtg_client.email = "test@example.com"
+    mocker.patch.object(scanner, "_save_tokens")
+    login_mock = mocker.patch.object(scanner.tgtg_client, "login")
+    attempts: list[int] = []
+
+    def fake_login() -> None:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise TgtgAPIError(403, b"datadome challenge")
+        scanner.tgtg_client.captcha = _pending_challenge()
+        raise TgtgLoginError(403, b'{"url":"https://geo.captcha-delivery.com/interstitial/abc"}')
+
+    login_mock.side_effect = fake_login
+
+    scanner._login_or_reauth()
+
+    assert login_mock.call_count == 2
+
+
+def test_startup_test_notification_skipped_while_captcha_pending(scanner: Scanner, mocker: MockerFixture):
+    """Startup must not hit the API for a test notification while captcha recovery is pending."""
+    scanner.tgtg_client.captcha = _pending_challenge()
+    notifiers_mock = mocker.MagicMock()
+    notifiers_mock.notifier_count = 1
+    scanner.notifiers = notifiers_mock
+    get_test_item = mocker.patch.object(scanner, "_get_test_item")
+
+    scanner._send_startup_test_notification()
+
+    get_test_item.assert_not_called()
+    notifiers_mock.send.assert_not_called()
+
+
+def test_startup_test_notification_sent_when_captcha_clear(scanner: Scanner, mocker: MockerFixture):
+    scanner.tgtg_client.captcha = None
+    notifiers_mock = mocker.MagicMock()
+    notifiers_mock.notifier_count = 1
+    scanner.notifiers = notifiers_mock
+    test_item = mocker.patch.object(scanner, "_get_test_item", return_value=Item({"item_id": "test"}))
+
+    scanner._send_startup_test_notification()
+
+    test_item.assert_called_once()
+    notifiers_mock.send.assert_called_once()
+
+
+def test_startup_test_notification_skipped_when_tests_disabled(scanner: Scanner, mocker: MockerFixture):
+    scanner.config.disable_tests = True
+    notifiers_mock = mocker.MagicMock()
+    notifiers_mock.notifier_count = 1
+    scanner.notifiers = notifiers_mock
+    get_test_item = mocker.patch.object(scanner, "_get_test_item")
+
+    scanner._send_startup_test_notification()
+
+    get_test_item.assert_not_called()
 
 
 def test_auto_reserve_uses_queue_amount(scanner: Scanner, test_item: Item, mocker: MockerFixture):
