@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 import responses
 from pytest_mock.plugin import MockerFixture
+from telegram import InlineKeyboardMarkup
 from telegram.error import TimedOut
 
 from tgtg_scanner.models import Config, Cron, Favorites, Item, Reservations
@@ -236,6 +237,32 @@ def test_console_reservation_auth_url(
     assert "Bank verification" not in capsys.readouterr().out
 
 
+def test_console_reservation_payment_failed_skips_bank_link(
+    reservations: Reservations,
+    favorites: Favorites,
+    capsys: pytest.CaptureFixture,
+):
+    from tgtg_scanner.models.reservations import PAYMENT_FAILED, Reservation
+
+    config = Config()
+    config.console.enabled = True
+    config.console.cron = Cron()
+    console = Console(config, reservations, favorites)
+
+    console._send(
+        Reservation(
+            item_id="i",
+            amount=1,
+            display_name="Bakery",
+            status=PAYMENT_FAILED,
+            auth_url="https://bank.example/3ds",
+        )
+    )
+    captured = capsys.readouterr()
+    assert "Bank verification" not in captured.out
+    assert "https://bank.example/3ds" not in captured.out
+
+
 def test_script(
     test_item: Item,
     reservations: Reservations,
@@ -436,6 +463,33 @@ def test_reservation_text_payment_failed():
     text2 = Telegram._reservation_text(Reservation("123", 1, "Bakery Bag", status=PAYMENT_ACTION_REQUIRED))
     assert "verification" in text2.lower()
     assert "TGTG app" in text2
+
+
+def test_telegram_reservation_reply_markup_reaches_send_message(
+    reservations: Reservations, favorites: Favorites, mocked_telegram: MockerFixture
+):
+    from tgtg_scanner.models.reservations import PAYMENT_ACTION_REQUIRED, Reservation
+
+    send_message = mocked_telegram.patch("telegram.Bot.send_message", return_value=None)
+
+    telegram = Telegram(_telegram_enabled_config(), reservations, favorites)
+    telegram.start()
+    telegram.send(
+        Reservation(
+            item_id="i",
+            amount=1,
+            display_name="Bakery",
+            status=PAYMENT_ACTION_REQUIRED,
+            auth_url="https://bank.example/3ds",
+        )
+    )
+    sleep(1)
+    telegram.stop()
+
+    assert send_message.call_count == 1
+    reply_markup = send_message.call_args.kwargs["reply_markup"]
+    assert isinstance(reply_markup, InlineKeyboardMarkup)
+    assert reply_markup.inline_keyboard[0][0].url == "https://bank.example/3ds"
 
 
 @pytest.fixture

@@ -2,7 +2,7 @@ import logging
 
 from tgtg_scanner.errors import ConsoleConfigurationError, MaskConfigurationError
 from tgtg_scanner.models import Config, Favorites, Item, Reservations
-from tgtg_scanner.models.reservations import Reservation
+from tgtg_scanner.models.reservations import PAYMENT_ACTION_REQUIRED, Reservation
 from tgtg_scanner.notifiers.base import Notifier
 
 log = logging.getLogger("tgtg")
@@ -27,7 +27,7 @@ class Console(Notifier):
         if isinstance(item, Item):
             message = item.unmask(self.body)
             print(message)
-        elif isinstance(item, Reservation) and getattr(item, "auth_url", None):
+        elif isinstance(item, Reservation) and item.status == PAYMENT_ACTION_REQUIRED and item.auth_url:
             print(f"Bank verification: {item.auth_url}")
 
     def __repr__(self) -> str:

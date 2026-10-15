@@ -1,6 +1,6 @@
 from telegram import InlineKeyboardMarkup
 
-from tgtg_scanner.models.reservations import PAYMENT_ACTION_REQUIRED, UNPAID_WARNING, Reservation
+from tgtg_scanner.models.reservations import PAYMENT_ACTION_REQUIRED, PAYMENT_FAILED, UNPAID_WARNING, Reservation
 from tgtg_scanner.notifiers.telegram import Telegram
 
 
@@ -109,4 +109,15 @@ def test_reservation_reply_markup_has_url_button():
 
 def test_reservation_reply_markup_none_without_url():
     r = Reservation(item_id="i", amount=1, display_name="Bakery", status="reserved")
+    assert Telegram._reservation_reply_markup(r) is None
+
+
+def test_reservation_reply_markup_none_for_payment_failed():
+    r = Reservation(
+        item_id="i",
+        amount=1,
+        display_name="Bakery",
+        status=PAYMENT_FAILED,
+        auth_url="https://bank.example/3ds",
+    )
     assert Telegram._reservation_reply_markup(r) is None
