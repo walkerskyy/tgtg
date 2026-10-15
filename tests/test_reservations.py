@@ -11,7 +11,9 @@ from pytest_mock.plugin import MockerFixture
 from tgtg_scanner.errors import TgtgAPIError
 from tgtg_scanner.models.item import Item
 from tgtg_scanner.models.reservations import (
+    ACTION_RE_ALERT_SECONDS,
     PAYMENT_ACTION_REQUIRED,
+    PAYMENT_DEADLINE,
     PAYMENT_FAILED,
     PAYMENT_RETRY_PENDING,
     UNPAID_WARNING,
@@ -1189,6 +1191,10 @@ def test_check_payment_no_url_leaves_auth_url_none(reservations: Reservations, m
     assert order.status == PAYMENT_ACTION_REQUIRED
     assert order.auth_url is None
     assert dump.called
+    # contract: keep dumping the payload shape on every poll while no url was found
+    reservations._check_payment(order, "o2", events)
+    assert order.auth_url is None
+    assert dump.call_count == 2
 
 
 def test_probe_payment_action_required_captures_auth_url(tgtg_item: dict, mocker: MockerFixture):
@@ -1204,8 +1210,6 @@ def test_probe_payment_action_required_captures_auth_url(tgtg_item: dict, mocker
 
 
 def test_action_required_realerts_every_interval(reservations: Reservations, mocker: MockerFixture):
-    from tgtg_scanner.models.reservations import ACTION_RE_ALERT_SECONDS
-
     now = int(time.time())
     order = Order(
         id="o3",
@@ -1219,12 +1223,6 @@ def test_action_required_realerts_every_interval(reservations: Reservations, moc
     )
     reservations.active_orders["o3"] = order
     mocker.patch.object(reservations.client, "get_order_status", return_value={"state": "PAYMENT_INITIATED"})
-    mocker.patch.object(
-        reservations.client,
-        "get_payment_status",
-        return_value={"state": "REAUTHORIZATION_REQUIRED", "action": {"url": "https://bank.example/3ds"}},
-    )
-    mocker.patch.object(reservations.client, "get_active", return_value={"orders": []})
     events = reservations.process_active_orders()
     realerted = [o for o in events if o.id == "o3"]
     assert len(realerted) == 1
@@ -1233,3 +1231,85 @@ def test_action_required_realerts_every_interval(reservations: Reservations, moc
     # last alert was just refreshed: no re-alert on the next poll
     events2 = reservations.process_active_orders()
     assert [o for o in events2 if o.id == "o3"] == []
+
+
+def test_realert_event_frozen_before_retry_mutates_order(reservations: Reservations, mocker: MockerFixture):
+    """Regression: the re-alert event must snapshot PAYMENT_ACTION_REQUIRED before
+    _run_due_retry flips the live order to PAYMENT_INITIATED in the same cycle."""
+    now = int(time.time())
+    order = Order(
+        id="o5",
+        item_id="i1",
+        amount=1,
+        display_name="Bakery",
+        status=PAYMENT_ACTION_REQUIRED,
+        created_at=now,
+        payment_id="p1",
+        pay_retry_at=now - 1,  # due now: the settled-payment probe runs right after the re-alert append
+        action_alerted_at=now - ACTION_RE_ALERT_SECONDS - 1,
+    )
+    reservations.active_orders["o5"] = order
+    mocker.patch.object(reservations.client, "get_order_status", return_value={"state": "PAYMENT_INITIATED"})
+    mocker.patch.object(reservations.client, "get_payment_status", return_value={"state": "AUTHORIZED"})
+    events = reservations.process_active_orders()
+    realerted = [o for o in events if o.id == "o5"]
+    assert len(realerted) == 1
+    assert realerted[0].status == PAYMENT_ACTION_REQUIRED
+    # the live order WAS mutated by the due retry - only the outgoing snapshot is protected
+    assert order.status == "PAYMENT_INITIATED"
+
+
+def test_action_required_realert_stopped_past_deadline(reservations: Reservations, mocker: MockerFixture):
+    now = int(time.time())
+    order = Order(
+        id="o6",
+        item_id="i1",
+        amount=1,
+        display_name="Bakery",
+        status=PAYMENT_ACTION_REQUIRED,
+        created_at=now - PAYMENT_DEADLINE - 1,
+        action_alerted_at=now - ACTION_RE_ALERT_SECONDS - 1,
+    )
+    reservations.active_orders["o6"] = order
+    mocker.patch.object(reservations.client, "get_order_status", return_value={"state": "PAYMENT_INITIATED"})
+    events = reservations.process_active_orders()
+    assert [o for o in events if o.id == "o6"] == []
+
+
+def test_action_required_realert_skipped_without_created_at(reservations: Reservations, mocker: MockerFixture):
+    """Limitation: a missing created_at makes the deadline check unsatisfiable, so no re-alert."""
+    now = int(time.time())
+    order = Order(
+        id="o7",
+        item_id="i1",
+        amount=1,
+        display_name="Bakery",
+        status=PAYMENT_ACTION_REQUIRED,
+        created_at=None,
+        action_alerted_at=now - ACTION_RE_ALERT_SECONDS - 1,
+    )
+    reservations.active_orders["o7"] = order
+    mocker.patch.object(reservations.client, "get_order_status", return_value={"state": "PAYMENT_INITIATED"})
+    events = reservations.process_active_orders()
+    assert [o for o in events if o.id == "o7"] == []
+
+
+def test_action_required_realert_fires_when_never_alerted(reservations: Reservations, mocker: MockerFixture):
+    """action_alerted_at is None -> due_at is 0, so the alert fires immediately."""
+    now = int(time.time())
+    order = Order(
+        id="o8",
+        item_id="i1",
+        amount=1,
+        display_name="Bakery",
+        status=PAYMENT_ACTION_REQUIRED,
+        created_at=now,
+        action_alerted_at=None,
+    )
+    reservations.active_orders["o8"] = order
+    mocker.patch.object(reservations.client, "get_order_status", return_value={"state": "PAYMENT_INITIATED"})
+    events = reservations.process_active_orders()
+    realerted = [o for o in events if o.id == "o8"]
+    assert len(realerted) == 1
+    assert realerted[0].status == PAYMENT_ACTION_REQUIRED
+    assert order.action_alerted_at is not None and order.action_alerted_at >= now

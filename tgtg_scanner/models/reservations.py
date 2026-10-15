@@ -2,7 +2,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from tgtg_scanner.errors import TgtgAPIError
@@ -503,7 +503,8 @@ class Reservations:
                 elif order.status == "RESERVED" and order.created_at and now - order.created_at >= PAYMENT_DEADLINE:
                     order.status = UNPAID_WARNING
                     changed = True
-                    events.append(order)
+                    # snapshot: _check_payment/_run_due_retry below may still mutate order.status this cycle
+                    events.append(replace(order))
                     log.warning("Order %s still unpaid for %s - sending warning", order_id, order.display_name)
             else:
                 if state in TERMINAL_STATES:
@@ -525,7 +526,8 @@ class Reservations:
                 due_at = (order.action_alerted_at or 0) + ACTION_RE_ALERT_SECONDS
                 if now >= due_at:
                     order.action_alerted_at = now
-                    events.append(order)
+                    # snapshot: _run_due_retry below may mutate order.status before the scanner reads this event
+                    events.append(replace(order))
                     changed = True
                     log.info(
                         "PAYACTION re-alert for order %s (%s) - bank verification still pending%s",
