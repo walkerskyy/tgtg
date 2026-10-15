@@ -1398,6 +1398,33 @@ def test_retry_probe_success_clears_stale_auth_url(reservations: Reservations, m
     assert order.auth_url is None
 
 
+def test_retry_probe_keeps_fresh_auth_url_capture(reservations: Reservations, mocker: MockerFixture):
+    """Regression: the stale-URL clear must run BEFORE the probe, so the fresh payment's 3DS
+    URL captured during the probe's poll survives the retry transition."""
+    mocker.patch("time.sleep")
+    now = int(time.time())
+    order = _due_order(status=PAYMENT_ACTION_REQUIRED, auth_url="https://bank.example/old", action_alerted_at=now)
+    reservations.active_orders["o1"] = order
+    reservations.client.get_order_status.return_value = {"state": "PAYMENT_INITIATED"}  # type: ignore[attr-defined]
+    reservations.client.get_payment_status.return_value = {  # type: ignore[attr-defined]
+        "state": "REAUTHORIZATION_REQUIRED",
+        "action": {"url": "https://bank.example/new"},
+    }
+    reservations.client.get_payment_methods.return_value = {  # type: ignore[attr-defined]
+        "payment_methods_state": "SUCCESS",
+        "payment_methods": [
+            {"payment_type": "PAYPAL", "payment_provider": "ADYEN", "adyen_api_payload": '{"type":"paypal"}'},
+        ],
+    }
+    reservations.client.create_payment.return_value = {"payments": [{"payment_id": "p2"}]}  # type: ignore[attr-defined]
+    reservations.client.pay_order.return_value = {"payment_id": "p2"}  # type: ignore[attr-defined]
+    reservations.process_active_orders()
+    assert reservations.client.pay_order.called  # type: ignore[attr-defined] # real probe ran (not mocked)
+    assert order.status == "PAYMENT_INITIATED"
+    assert order.payment_id == "p2"
+    assert order.auth_url == "https://bank.example/new"
+
+
 def test_action_required_realert_fires_when_never_alerted(reservations: Reservations, mocker: MockerFixture):
     """action_alerted_at is None -> due_at is 0, so the alert fires immediately."""
     now = int(time.time())

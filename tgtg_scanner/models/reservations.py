@@ -626,9 +626,9 @@ class Reservations:
                 return True
         order.pay_attempts += 1
         log.info("PAYRETRY attempt %d for order %s (%s)", order.pay_attempts, order_id, order.display_name)
+        order.auth_url = None  # fresh pay attempt: any prior 3DS URL is dead (clear first so a fresh capture below wins)
         if self._probe_payment(order_id, order.item_id, order.display_name):
             order.status = "PAYMENT_INITIATED"
-            order.auth_url = None  # fresh pay attempt: any prior 3DS URL is dead
             log.info("PAYRETRY pay accepted for order %s - watching for PAID", order_id)
             return True
         return self._handle_payment_failure(
