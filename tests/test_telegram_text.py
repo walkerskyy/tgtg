@@ -1,6 +1,6 @@
 from telegram import InlineKeyboardMarkup
 
-from tgtg_scanner.models.reservations import PAYMENT_ACTION_REQUIRED, PAYMENT_FAILED, UNPAID_WARNING, Reservation
+from tgtg_scanner.models.reservations import PAYMENT_ACTION_REQUIRED, PAYMENT_FAILED, UNPAID_WARNING, USER_BLOCKED, Reservation
 from tgtg_scanner.notifiers.telegram import Telegram
 
 
@@ -29,6 +29,14 @@ def test_unpaid_warning_text():
 def test_terminal_text():
     r = Reservation("1", 1, "Bakery", status="CANCELED")
     assert "CANCELED" in Telegram._reservation_text(r)
+
+
+def test_user_blocked_text():
+    r = Reservation("1", 1, "Sicily Vibes", status=USER_BLOCKED)
+    text = Telegram._reservation_text(r)
+    assert "BLOCKED" in text
+    assert "Sicily Vibes" in text
+    assert "TGTG app" in text
 
 
 def test_orders_menu_hides_confirmed():

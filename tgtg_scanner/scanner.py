@@ -166,7 +166,12 @@ class Scanner:
 
         amounts = {item_id: item.items_available for item_id, item in self.monitor.state.items()}
         log.debug("new State: %s", amounts)
-        self.reservations.make_orders(self.monitor.state, self.notifiers.send, on_sold_out=self.drop_history.record)
+        self.reservations.make_orders(
+            self.monitor.state,
+            self.notifiers.send,
+            on_sold_out=self.drop_history.record,
+            on_user_blocked=self._notify_user_blocked,
+        )
 
         if not self.monitor.state:
             log.warning("No items in observation! Did you add any favorites?")
@@ -174,6 +179,10 @@ class Scanner:
         self._process_order_events()
 
         self._save_tokens()
+
+    def _notify_user_blocked(self, reservation: ReservationObj) -> None:
+        if self.notifiers:
+            self.notifiers.send(reservation)
 
     def _process_items(self, items: list[Item]) -> None:
         """Observe items, attempt reservations on transitions, send notifications."""
@@ -335,7 +344,12 @@ class Scanner:
                 else:
                     log.error(err)
         self._process_items(items)
-        self.reservations.make_orders(self.monitor.state, self.notifiers.send, on_sold_out=self.drop_history.record)
+        self.reservations.make_orders(
+            self.monitor.state,
+            self.notifiers.send,
+            on_sold_out=self.drop_history.record,
+            on_user_blocked=self._notify_user_blocked,
+        )
         self._process_order_events()
         self._save_tokens()
 

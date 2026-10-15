@@ -17,6 +17,7 @@ from tgtg_scanner.models.reservations import (
     PAYMENT_FAILED,
     PAYMENT_RETRY_PENDING,
     UNPAID_WARNING,
+    USER_BLOCKED,
     Order,
     Reservation,
     Reservations,
@@ -449,6 +450,45 @@ def test_make_orders_non_sold_out_error_no_callback(reservations: Reservations, 
     reservations.reserve("123", "Test Item")
     reservations.make_orders({"123": Item(tgtg_item)}, MagicMock(), on_sold_out=sold_out_mock)
     sold_out_mock.assert_not_called()
+
+
+def test_make_orders_user_blocked_pauses_attempts_and_alerts_once(reservations: Reservations, tgtg_item: dict):
+    callback_mock = MagicMock()
+    alert_mock = MagicMock()
+    reservations.client.create_order.side_effect = TgtgAPIError("USER_BLOCKED", b"{}")  # type: ignore[attr-defined]
+    reservations.reserve("123", "Test Item")
+    state = {"123": Item(tgtg_item)}
+
+    reservations.make_orders(state, callback_mock, on_user_blocked=alert_mock)
+
+    assert reservations.user_blocked_until > int(time.time())
+    callback_mock.assert_not_called()
+    assert len(reservations.reservation_query) == 1  # stays queued for retry
+    assert alert_mock.call_count == 1
+    alerted = alert_mock.call_args[0][0]
+    assert alerted.status == USER_BLOCKED
+    assert alerted.display_name == "Test Item"
+
+    # second cycle during cooldown: no new attempts, no repeat alert
+    reservations.make_orders(state, callback_mock, on_user_blocked=alert_mock)
+    reservations.client.create_order.assert_called_once()
+    assert alert_mock.call_count == 1
+    callback_mock.assert_not_called()
+
+
+def test_make_orders_user_blocked_cooldown_expiry_resumes(reservations: Reservations, tgtg_item: dict):
+    callback_mock = MagicMock()
+    reservations.client.create_order.side_effect = TgtgAPIError("USER_BLOCKED", b"{}")  # type: ignore[attr-defined]
+    reservations.reserve("123", "Test Item")
+    reservations.make_orders({"123": Item(tgtg_item)}, callback_mock, on_user_blocked=MagicMock())
+    assert len(reservations.reservation_query) == 1
+
+    reservations.client.create_order.side_effect = None  # type: ignore[attr-defined]  # block lifted
+    reservations.user_blocked_until = int(time.time()) - 1
+    reservations.make_orders({"123": Item(tgtg_item)}, callback_mock, on_user_blocked=MagicMock())
+
+    callback_mock.assert_called_once()
+    assert len(reservations.reservation_query) == 0
 
 
 def test_pay_probe_runs_after_order_created(tgtg_item: dict):

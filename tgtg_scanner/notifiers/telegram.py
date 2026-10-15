@@ -33,7 +33,14 @@ from telegram.warnings import PTBUserWarning
 from tgtg_scanner.errors import MaskConfigurationError, TelegramConfigurationError
 from tgtg_scanner.models import Config, Favorites, Item, Reservations
 from tgtg_scanner.models.favorites import AddFavoriteRequest, RemoveFavoriteRequest
-from tgtg_scanner.models.reservations import PAYMENT_ACTION_REQUIRED, PAYMENT_FAILED, UNPAID_WARNING, Order, Reservation
+from tgtg_scanner.models.reservations import (
+    PAYMENT_ACTION_REQUIRED,
+    PAYMENT_FAILED,
+    UNPAID_WARNING,
+    USER_BLOCKED,
+    Order,
+    Reservation,
+)
 from tgtg_scanner.notifiers.base import Notifier
 
 log = logging.getLogger("tgtg")
@@ -237,6 +244,11 @@ class Telegram(Notifier):
             return f"{base}\n(no link captured - check the TGTG app and your banking app)"
         if item.status == UNPAID_WARNING:
             return f"{item.display_name} RESERVED BUT UNPAID - open the TGTG app now, hold expires soon"
+        if item.status == USER_BLOCKED:
+            return (
+                f"{item.display_name} TGTG ACCOUNT BLOCKED - order attempts paused; "
+                "cancel any pending order in the TGTG app and wait before resuming the scanner"
+            )
         if item.status and item.status != "reserved":
             return f"{item.display_name} order status: {item.status}"
         return f"{item.display_name} is reserved for 5 minutes"

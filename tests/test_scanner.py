@@ -8,6 +8,7 @@ from pytest_mock.plugin import MockerFixture
 from tgtg_scanner.captcha import CaptchaChallenge
 from tgtg_scanner.errors import TgtgAPIError, TgtgLoginError
 from tgtg_scanner.models import Config, Item
+from tgtg_scanner.models.reservations import USER_BLOCKED, Reservation
 from tgtg_scanner.models.schedule import Schedule
 from tgtg_scanner.scanner import Scanner
 from tgtg_scanner.tgtg_client import extract_datadome
@@ -44,6 +45,16 @@ def test_auto_reserve_queued_item_failure(scanner: Scanner, test_item: Item, moc
 
     assert test_item.reservation_status == "failed"
     assert test_item.reservation_error is not None
+
+
+def test_notify_user_blocked_forwards_alert(scanner: Scanner, mocker: MockerFixture):
+    notifiers_mock = mocker.MagicMock()
+    scanner.notifiers = notifiers_mock
+    alert = Reservation("123", 1, "Bakery", status=USER_BLOCKED)
+
+    scanner._notify_user_blocked(alert)
+
+    notifiers_mock.send.assert_called_once_with(alert)
 
 
 def test_auto_reserve_skips_unlisted_item(scanner: Scanner, test_item: Item, mocker: MockerFixture):

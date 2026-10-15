@@ -19,6 +19,8 @@ PAYMENT_ACTION_REQUIRED = "PAYMENT_ACTION_REQUIRED"
 PAYMENT_RETRY_PENDING = "PAYMENT_RETRY_PENDING"
 PAYMENT_DEADLINE = 270  # seconds; TGTG reservation hold is ~5 minutes
 ACTION_RE_ALERT_SECONDS = 60  # re-notify while the user still must complete bank verification
+USER_BLOCKED = "USER_BLOCKED"  # TGTG order-state: account refused at order creation
+USER_BLOCKED_COOLDOWN = 1800  # seconds; pause order attempts after a user-level block
 SOLD_OUT_MARKERS = ("sold out", "no longer available", "not available", "out of stock")
 TERMINAL_STATES = frozenset({"CANCELED", "CANCELLED", "EXPIRED", "REFUNDED", "ABORTED"})
 # PaymentStatus enum from the TGTG app (26.10.0)
@@ -34,6 +36,11 @@ def is_sold_out_error(err: Exception) -> bool:
     """Heuristic: does this create_order failure mean we lost the race?"""
     msg = str(err).lower()
     return any(marker in msg for marker in SOLD_OUT_MARKERS)
+
+
+def is_user_blocked_error(err: Exception) -> bool:
+    """Heuristic: is this a non-SUCCESS create_order state refusing the account?"""
+    return isinstance(err, TgtgAPIError) and bool(err.args) and str(err.args[0]) == USER_BLOCKED
 
 
 def _redact_secrets(payload):
@@ -241,6 +248,7 @@ class Reservations:
         self.client = client
         self.reservation_query: list[Reservation] = []
         self.active_orders: dict[str, Order] = {}
+        self.user_blocked_until: int = 0
         self._probe_methods: dict[str, dict] = {}
         self._persist_path = Path(persist_dir) / RESERVATIONS_FILE if persist_dir else None
         self._load()
@@ -357,6 +365,7 @@ class Reservations:
         state: dict[str, Item],
         callback: Callable[[Reservation], None],
         on_sold_out: Callable[[str], None] | None = None,
+        on_user_blocked: Callable[[Reservation], None] | None = None,
     ) -> None:
         """Create orders for all eligible reservations.
 
@@ -367,8 +376,15 @@ class Reservations:
             state (Dict[str, Item]): Current item state
             callback (Callable[[Reservation], None]): Callback for each order
             on_sold_out: called with item_id when order creation fails with a sold-out-class error
+            on_user_blocked: called once per block episode with a USER_BLOCKED-status reservation
 
         """
+        if int(time.time()) < self.user_blocked_until:
+            log.debug(
+                "Order attempts paused until %s (account blocked by TGTG)",
+                time.strftime("%H:%M:%S", time.localtime(self.user_blocked_until)),
+            )
+            return
         for reservation in list(self.reservation_query):
             if reservation.schedule is not None and not reservation.schedule.is_now():
                 log.debug("Reservation for %s outside schedule window - skipping", reservation.display_name)
@@ -384,6 +400,18 @@ class Reservations:
                     self.remove(reservation.item_id)
                     log.info("Reservation completed for %s and removed from queue", reservation.display_name)
                 except Exception as exc:
+                    if is_user_blocked_error(exc):
+                        self.user_blocked_until = int(time.time()) + USER_BLOCKED_COOLDOWN
+                        log.error(
+                            "TGTG refused to create an order (%s) - account blocked; "
+                            "pausing reservation attempts for %d minutes. Cancel any pending order in the TGTG app "
+                            "and wait before the block lifts.",
+                            exc,
+                            USER_BLOCKED_COOLDOWN // 60,
+                        )
+                        if on_user_blocked is not None:
+                            on_user_blocked(replace(reservation, status=USER_BLOCKED))
+                        break
                     log.warning("Order failed for %s: %s", reservation.display_name, exc)
                     if on_sold_out is not None and is_sold_out_error(exc):
                         on_sold_out(reservation.item_id)
