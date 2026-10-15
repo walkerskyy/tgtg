@@ -28,4 +28,5 @@ datadome
 # runtime state
 reservations.json
 drop_history.json
+payment_action_shape.json
 scanner.log

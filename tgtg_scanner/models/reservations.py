@@ -7,6 +7,7 @@ from pathlib import Path
 
 from tgtg_scanner.errors import TgtgAPIError
 from tgtg_scanner.models.item import Item
+from tgtg_scanner.models.payment_challenges import dump_payment_shape, extract_auth_url
 from tgtg_scanner.models.schedule import Schedule
 from tgtg_scanner.tgtg_client import TgtgClient
 
@@ -171,6 +172,8 @@ class Order:
     pay_attempts: int = 0
     pay_retry_at: int | None = None
     pay_alerted: bool = False
+    auth_url: str | None = None
+    action_alerted_at: int | None = None
 
 
 @dataclass
@@ -222,6 +225,8 @@ def _order_from_dict(data: dict) -> Order:
         pay_attempts=int(data.get("pay_attempts", 0) or 0),
         pay_retry_at=int(data["pay_retry_at"]) if data.get("pay_retry_at") is not None else None,
         pay_alerted=bool(data.get("pay_alerted", False)),
+        auth_url=data.get("auth_url"),
+        action_alerted_at=int(data["action_alerted_at"]) if data.get("action_alerted_at") is not None else None,
     )
 
 
@@ -555,10 +560,20 @@ class Reservations:
             return self._handle_payment_failure(order, order_id, events, reason, PAYMENT_FAILED)
         if pstate in PAYMENT_ACTION_STATES:
             failure_reason = res.get("failure_reason") if isinstance(res, dict) else None
+            first_encounter = order.auth_url is None
+            url = extract_auth_url(res)
+            if url and url != order.auth_url:
+                order.auth_url = url
+                log.info("PAYACTION bank verification url for order %s: %s", order_id, url)
+            if first_encounter:
+                dump_payment_shape(res)
             reason = f"payment state {pstate}"
             if failure_reason is not None:
                 reason += f", failure_reason={failure_reason}"
-            return self._handle_payment_failure(order, order_id, events, reason, PAYMENT_ACTION_REQUIRED)
+            changed = self._handle_payment_failure(order, order_id, events, reason, PAYMENT_ACTION_REQUIRED)
+            if changed and order.status == PAYMENT_ACTION_REQUIRED and order.action_alerted_at is None:
+                order.action_alerted_at = int(time.time())
+            return changed
         return False
 
     def _run_due_retry(self, order: Order, order_id: str, state: str, now: int, events: list[Order]) -> bool:
@@ -772,6 +787,7 @@ class Reservations:
 
     def _poll_payment_status(self, order_id: str, payment_id: str) -> None:
         """Poll the fresh payment until it leaves the in-flight states or we time out."""
+        order = self.active_orders.get(order_id)
         state: str | None = None
         for attempt in range(5):
             try:
@@ -794,14 +810,18 @@ class Reservations:
                 )
                 return
             if state in PAYMENT_ACTION_STATES:
+                url = extract_auth_url(status)
+                if url and order is not None and url != order.auth_url:
+                    order.auth_url = url
                 reason = status.get("failure_reason") if isinstance(status, dict) else None
                 log.warning(
-                    "PAYPROBE payment %s needs verification for order %s (state=%s, failure_reason=%s) "
-                    "- open the TGTG app to approve it",
+                    "PAYPROBE payment %s needs verification for order %s (state=%s, failure_reason=%s, url=%s) "
+                    "- complete the bank verification before the hold expires",
                     payment_id,
                     order_id,
                     state,
                     reason,
+                    url,
                 )
                 return
             if state in PAYMENT_SETTLED_STATES:

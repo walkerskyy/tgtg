@@ -1122,3 +1122,74 @@ def test_retry_executor_alerts_once_when_budget_exhausted(reservations: Reservat
     assert "o1" in reservations.active_orders  # ledger keeps the order while retrying
     assert order.pay_retry_at is not None  # slow retry still armed
     assert order.pay_attempts == 4
+
+
+def test_order_auth_url_roundtrip(tmp_path: Path):
+    (tmp_path / "reservations.json").write_text(
+        json.dumps(
+            {
+                "reservation_query": [],
+                "active_orders": [
+                    {
+                        "id": "order-1",
+                        "item_id": "item-1",
+                        "amount": 1,
+                        "display_name": "Bakery",
+                        "status": PAYMENT_ACTION_REQUIRED,
+                        "auth_url": "https://bank.example/3ds",
+                        "action_alerted_at": 100,
+                    }
+                ],
+            }
+        )
+    )
+    res = Reservations(MagicMock(), str(tmp_path))
+    order = res.active_orders["order-1"]
+    assert order.auth_url == "https://bank.example/3ds"
+    assert order.action_alerted_at == 100
+    # save side roundtrips through asdict too
+    res._save()
+    reloaded = Reservations(MagicMock(), str(tmp_path)).active_orders["order-1"]
+    assert reloaded.auth_url == "https://bank.example/3ds"
+    assert reloaded.action_alerted_at == 100
+
+
+def test_check_payment_extracts_auth_url_and_dumps_shape(reservations: Reservations, mocker: MockerFixture):
+    order = _retry_order(pay_attempts=2)
+    reservations.active_orders["o1"] = order
+    mocker.patch.object(
+        reservations.client,
+        "get_payment_status",
+        return_value={"state": "REAUTHORIZATION_REQUIRED", "action": {"url": "https://bank.example/go"}},
+    )
+    dump = mocker.patch("tgtg_scanner.models.reservations.dump_payment_shape")
+    events: list[Order] = []
+    changed = reservations._check_payment(order, "o1", events)
+    assert changed is True
+    assert order.status == PAYMENT_ACTION_REQUIRED
+    assert order.auth_url == "https://bank.example/go"
+    assert dump.called
+    assert events and events[0].auth_url == "https://bank.example/go"
+
+
+def test_check_payment_no_url_leaves_auth_url_none(reservations: Reservations, mocker: MockerFixture):
+    order = _retry_order(id="o2", pay_attempts=2)
+    reservations.active_orders["o2"] = order
+    mocker.patch.object(reservations.client, "get_payment_status", return_value={"state": "REAUTHORIZATION_REQUIRED"})
+    mocker.patch("tgtg_scanner.models.reservations.dump_payment_shape")
+    events: list[Order] = []
+    reservations._check_payment(order, "o2", events)
+    assert order.status == PAYMENT_ACTION_REQUIRED
+    assert order.auth_url is None
+
+
+def test_probe_payment_action_required_captures_auth_url(tgtg_item: dict, mocker: MockerFixture):
+    mocker.patch("time.sleep")
+    client = _probe_client()
+    client.get_payment_status.side_effect = [
+        {"state": "REAUTHORIZATION_REQUIRED", "action": {"url": "https://bank.example/3ds"}},
+    ]
+    r = Reservations(client)
+    r.reserve("123", "Test Item")
+    r.make_orders({"123": Item(tgtg_item)}, MagicMock())
+    assert r.active_orders["o1"].auth_url == "https://bank.example/3ds"
