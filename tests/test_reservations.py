@@ -1170,17 +1170,25 @@ def test_check_payment_extracts_auth_url_and_dumps_shape(reservations: Reservati
     assert order.auth_url == "https://bank.example/go"
     assert dump.called
     assert events and events[0].auth_url == "https://bank.example/go"
+    assert order.action_alerted_at is not None
+    alerted_at = order.action_alerted_at
+    # second poll with the same payload: no re-timestamp, no second shape dump
+    events2: list[Order] = []
+    reservations._check_payment(order, "o1", events2)
+    assert order.action_alerted_at == alerted_at
+    assert dump.call_count == 1
 
 
 def test_check_payment_no_url_leaves_auth_url_none(reservations: Reservations, mocker: MockerFixture):
     order = _retry_order(id="o2", pay_attempts=2)
     reservations.active_orders["o2"] = order
     mocker.patch.object(reservations.client, "get_payment_status", return_value={"state": "REAUTHORIZATION_REQUIRED"})
-    mocker.patch("tgtg_scanner.models.reservations.dump_payment_shape")
+    dump = mocker.patch("tgtg_scanner.models.reservations.dump_payment_shape")
     events: list[Order] = []
     reservations._check_payment(order, "o2", events)
     assert order.status == PAYMENT_ACTION_REQUIRED
     assert order.auth_url is None
+    assert dump.called
 
 
 def test_probe_payment_action_required_captures_auth_url(tgtg_item: dict, mocker: MockerFixture):
@@ -1193,3 +1201,35 @@ def test_probe_payment_action_required_captures_auth_url(tgtg_item: dict, mocker
     r.reserve("123", "Test Item")
     r.make_orders({"123": Item(tgtg_item)}, MagicMock())
     assert r.active_orders["o1"].auth_url == "https://bank.example/3ds"
+
+
+def test_action_required_realerts_every_interval(reservations: Reservations, mocker: MockerFixture):
+    from tgtg_scanner.models.reservations import ACTION_RE_ALERT_SECONDS
+
+    now = int(time.time())
+    order = Order(
+        id="o3",
+        item_id="i1",
+        amount=1,
+        display_name="Bakery",
+        status=PAYMENT_ACTION_REQUIRED,
+        created_at=now,
+        auth_url="https://bank.example/3ds",
+        action_alerted_at=now - ACTION_RE_ALERT_SECONDS - 1,
+    )
+    reservations.active_orders["o3"] = order
+    mocker.patch.object(reservations.client, "get_order_status", return_value={"state": "PAYMENT_INITIATED"})
+    mocker.patch.object(
+        reservations.client,
+        "get_payment_status",
+        return_value={"state": "REAUTHORIZATION_REQUIRED", "action": {"url": "https://bank.example/3ds"}},
+    )
+    mocker.patch.object(reservations.client, "get_active", return_value={"orders": []})
+    events = reservations.process_active_orders()
+    realerted = [o for o in events if o.id == "o3"]
+    assert len(realerted) == 1
+    assert realerted[0].auth_url == "https://bank.example/3ds"
+    assert order.action_alerted_at is not None and order.action_alerted_at >= now
+    # last alert was just refreshed: no re-alert on the next poll
+    events2 = reservations.process_active_orders()
+    assert [o for o in events2 if o.id == "o3"] == []

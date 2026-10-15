@@ -68,6 +68,6 @@ def dump_payment_shape(status: object, path: str = "payment_action_shape.json") 
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(status, f, indent=2, default=str)
-        log.info("Payment action shape written to %s - review and share if reporting a bug", path)
+        log.info("Payment action shape written to %s - contains sensitive payment data, redact before sharing", path)
     except OSError as exc:
         log.debug("Could not dump payment shape: %s", exc)

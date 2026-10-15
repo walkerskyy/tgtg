@@ -18,6 +18,7 @@ PAYMENT_FAILED = "PAYMENT_FAILED"
 PAYMENT_ACTION_REQUIRED = "PAYMENT_ACTION_REQUIRED"
 PAYMENT_RETRY_PENDING = "PAYMENT_RETRY_PENDING"
 PAYMENT_DEADLINE = 270  # seconds; TGTG reservation hold is ~5 minutes
+ACTION_RE_ALERT_SECONDS = 60  # re-notify while the user still must complete bank verification
 SOLD_OUT_MARKERS = ("sold out", "no longer available", "not available", "out of stock")
 TERMINAL_STATES = frozenset({"CANCELED", "CANCELLED", "EXPIRED", "REFUNDED", "ABORTED"})
 # PaymentStatus enum from the TGTG app (26.10.0)
@@ -520,6 +521,18 @@ class Reservations:
             ):
                 if self._check_payment(order, order_id, events):
                     changed = True
+            if order.status == PAYMENT_ACTION_REQUIRED and order.created_at and now - order.created_at < PAYMENT_DEADLINE:
+                due_at = (order.action_alerted_at or 0) + ACTION_RE_ALERT_SECONDS
+                if now >= due_at:
+                    order.action_alerted_at = now
+                    events.append(order)
+                    changed = True
+                    log.info(
+                        "PAYACTION re-alert for order %s (%s) - bank verification still pending%s",
+                        order_id,
+                        order.display_name,
+                        f", url={order.auth_url}" if order.auth_url else "",
+                    )
             try:
                 if self._run_due_retry(order, order_id, state, now, events):
                     changed = True
@@ -560,12 +573,12 @@ class Reservations:
             return self._handle_payment_failure(order, order_id, events, reason, PAYMENT_FAILED)
         if pstate in PAYMENT_ACTION_STATES:
             failure_reason = res.get("failure_reason") if isinstance(res, dict) else None
-            first_encounter = order.auth_url is None
+            needs_shape_dump = order.auth_url is None
             url = extract_auth_url(res)
             if url and url != order.auth_url:
                 order.auth_url = url
                 log.info("PAYACTION bank verification url for order %s: %s", order_id, url)
-            if first_encounter:
+            if needs_shape_dump:
                 dump_payment_shape(res)
             reason = f"payment state {pstate}"
             if failure_reason is not None:
