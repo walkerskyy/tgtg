@@ -1,11 +1,14 @@
 import io
 import json
+import logging
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 from tgtg_scanner.captcha import (
     CaptchaChallenge,
+    _is_plausible_datadome,
     captcha_url_from_response,
     normalize_datadome_value,
     prompt_datadome,
@@ -168,24 +171,22 @@ def test_read_browser_loader_error_warns_and_returns_none(mocker):
 
 
 class _FakeStdin:
-    def __init__(self, line: str = "", tty: bool = True, raise_eof: bool = False):
+    def __init__(self, line: str = "", tty: bool = True, raise_exc: BaseException | None = None):
         self._line = line
         self._tty = tty
-        self._raise_eof = raise_eof
+        self._raise_exc = raise_exc
 
     def isatty(self) -> bool:
         return self._tty
 
     def readline(self) -> str:
-        if self._raise_eof:
-            raise EOFError
+        if self._raise_exc is not None:
+            raise self._raise_exc
         return self._line
 
 
-def _prompt(monkeypatch, line: str = "", tty: bool = True, raise_eof: bool = False):
-    import sys
-
-    monkeypatch.setattr(sys, "stdin", _FakeStdin(line, tty, raise_eof))
+def _prompt(monkeypatch, line: str = "", tty: bool = True, raise_exc: BaseException | None = None):
+    monkeypatch.setattr(sys, "stdin", _FakeStdin(line, tty, raise_exc))
     monkeypatch.setattr(sys, "stdout", io.StringIO())
     return prompt_datadome(CaptchaChallenge(url=CAPTCHA_URL, first_seen=datetime.now(timezone.utc)))
 
@@ -203,7 +204,15 @@ def test_prompt_datadome_empty_line(monkeypatch):
 
 
 def test_prompt_datadome_eof(monkeypatch):
-    assert _prompt(monkeypatch, raise_eof=True) is None
+    assert _prompt(monkeypatch, raise_exc=EOFError()) is None
+
+
+def test_prompt_datadome_keyboard_interrupt(monkeypatch):
+    assert _prompt(monkeypatch, raise_exc=KeyboardInterrupt()) is None
+
+
+def test_prompt_datadome_os_error(monkeypatch):
+    assert _prompt(monkeypatch, raise_exc=OSError("input closed")) is None
 
 
 def test_prompt_datadome_non_tty(monkeypatch):
@@ -215,11 +224,42 @@ def test_prompt_datadome_rejects_control_chars(monkeypatch):
 
 
 def test_prompt_datadome_prints_challenge_url(monkeypatch):
-    import sys
-
     stdout = io.StringIO()
     monkeypatch.setattr(sys, "stdin", _FakeStdin("abc\n"))
     monkeypatch.setattr(sys, "stdout", stdout)
 
     prompt_datadome(CaptchaChallenge(url=CAPTCHA_URL, first_seen=datetime.now(timezone.utc)))
     assert CAPTCHA_URL in stdout.getvalue()
+
+
+def test_prompt_datadome_without_challenge(monkeypatch):
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, "stdin", _FakeStdin("abc123token\n"))
+    monkeypatch.setattr(sys, "stdout", stdout)
+
+    assert prompt_datadome() == "abc123token"
+    text = stdout.getvalue()
+    assert "solve it in your browser" in text
+    assert "http" not in text
+
+
+def test_prompt_datadome_never_logs_pasted_value(monkeypatch, caplog):
+    with caplog.at_level(logging.DEBUG, logger="tgtg"):
+        assert _prompt(monkeypatch, line="abc123token\n") == "abc123token"
+        assert "abc123token" not in caplog.text
+        assert _prompt(monkeypatch, line="bad\x00cookie\n") is None
+        assert "bad\x00cookie" not in caplog.text
+
+
+def test_is_plausible_datadome_accepts_token():
+    assert _is_plausible_datadome("abc123token") is True
+
+
+def test_is_plausible_datadome_rejects_control_chars():
+    assert _is_plausible_datadome("bad\x00cookie") is False
+    assert _is_plausible_datadome("bad\x01cookie") is False
+    assert _is_plausible_datadome("bad\x7fcookie") is False
+
+
+def test_is_plausible_datadome_rejects_replacement_char():
+    assert _is_plausible_datadome("bad�cookie") is False

@@ -56,6 +56,11 @@ def normalize_datadome_value(value: str) -> str | None:
     return value
 
 
+def _is_plausible_datadome(value: str) -> bool:
+    """Return False when the value contains control or replacement characters."""
+    return not any(ord(ch) < 0x20 or ord(ch) == 0x7F or ch == "\ufffd" for ch in value)
+
+
 def prompt_datadome(challenge: CaptchaChallenge | None = None) -> str | None:
     """Interactively ask the user to paste a fresh datadome cookie value.
 
@@ -83,12 +88,12 @@ def prompt_datadome(challenge: CaptchaChallenge | None = None) -> str | None:
             if raw.strip():
                 log.warning("Pasted value is not a plausible datadome cookie - ignoring")
             return None
-        if any(ord(ch) < 0x20 or ord(ch) == 0x7F or ch == "�" for ch in value):
+        if not _is_plausible_datadome(value):
             log.warning("Pasted value does not contain a plausible datadome cookie - ignoring")
             return None
         return value
     except Exception as exc:
-        log.warning("Captcha prompt failed: %s", exc)
+        log.warning("Captcha prompt failed: %s", type(exc).__name__)
         return None
 
 
@@ -102,7 +107,7 @@ def read_inbox_datadome(path: Path) -> str | None:
         log.warning("Could not read captcha inbox %s: %s", path, exc)
         return None
     value = normalize_datadome_value(raw)
-    if value is not None and any(ord(ch) < 0x20 or ord(ch) == 0x7F or ch == "\ufffd" for ch in value):
+    if value is not None and not _is_plausible_datadome(value):
         log.warning("Captcha inbox %s does not contain a plausible datadome cookie - ignoring", path)
         return None
     return value
