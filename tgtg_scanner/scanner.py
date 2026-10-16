@@ -275,6 +275,7 @@ class Scanner:
             from_inbox = False
             if self.config.tgtg.captcha_prompt:
                 candidate = prompt_datadome(challenge)
+            from_prompt = candidate is not None
             if candidate is None:
                 browser = self.config.tgtg.captcha_browser
                 if browser and browser.lower() != "off":
@@ -291,6 +292,8 @@ class Scanner:
             previous = extract_datadome(self.tgtg_client)
             if candidate == previous:
                 log.debug("Captcha candidate not fresh - still waiting (solve: %s)", challenge.url)
+                if self.config.tgtg.captcha_prompt and from_prompt:
+                    log.info("Pasted datadome cookie matches the current one - paste a fresh value from the solved captcha page")
                 return
             self.tgtg_client.apply_datadome(candidate)
             try:

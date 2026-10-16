@@ -823,3 +823,22 @@ def test_recover_captcha_prompt_disabled_skips_prompt(scanner: Scanner, tmp_path
 
     mock_prompt.assert_not_called()
     assert scanner.tgtg_client.cookie == "datadome=browsercookie"
+
+
+def test_recover_captcha_prompt_none_falls_back_to_inbox(scanner: Scanner, tmp_path: Path, mocker: MockerFixture):
+    scanner.config.token_path = str(tmp_path)
+    scanner.config.tgtg.captcha_prompt = True
+    scanner.config.tgtg.captcha_browser = "off"
+    (tmp_path / "datadome_in").write_text("datadome=inboxcookie; Path=/\n", encoding="utf-8")
+    scanner.tgtg_client.captcha = _pending_captcha()
+    mocker.patch("tgtg_scanner.scanner.prompt_datadome", return_value=None)
+    mocker.patch("tgtg_scanner.scanner.read_browser_datadome")
+    mock_favorites = mocker.patch.object(scanner.tgtg_client, "get_favorites", return_value=[])
+    mock_save = mocker.patch.object(scanner, "_save_tokens")
+
+    scanner._recover_captcha()
+
+    assert scanner.tgtg_client.captcha is None
+    assert scanner.tgtg_client.cookie == "datadome=inboxcookie"
+    mock_favorites.assert_called_once()
+    mock_save.assert_called_once()
