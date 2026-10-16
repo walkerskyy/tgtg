@@ -175,3 +175,23 @@ def test_captcha_config_ini(tmp_path, monkeypatch: pytest.MonkeyPatch):
     config = Config(str(ini), disable_tests=True)
     assert config.tgtg.captcha_browser == "firefox"
     assert config.tgtg.captcha_cooldown == 120
+
+
+def test_captcha_prompt_defaults(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("TGTG_CAPTCHA_PROMPT", raising=False)
+    config = Config(disable_tests=True)
+    assert config.tgtg.captcha_prompt is False
+
+
+def test_captcha_prompt_from_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TGTG_CAPTCHA_PROMPT", "true")
+    config = Config(disable_tests=True)
+    assert config.tgtg.captcha_prompt is True
+
+
+def test_captcha_prompt_ini(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("TGTG_CAPTCHA_PROMPT", raising=False)
+    ini = tmp_path / "config.ini"
+    ini.write_text("[TGTG]\nCaptchaPrompt = true\n")
+    config = Config(str(ini), disable_tests=True)
+    assert config.tgtg.captcha_prompt is True
