@@ -773,3 +773,53 @@ def test_recover_captcha_browser_success_keeps_inbox_file(scanner: Scanner, tmp_
     assert scanner.tgtg_client.captcha is None
     assert scanner.tgtg_client.cookie == "datadome=browsercookie"
     assert (tmp_path / "datadome_in").exists()
+
+
+def test_recover_captcha_prompt_applies_pasted_cookie(scanner: Scanner, tmp_path: Path, mocker: MockerFixture):
+    scanner.config.token_path = str(tmp_path)
+    scanner.config.tgtg.captcha_prompt = True
+    scanner.tgtg_client.captcha = _pending_captcha()
+    mock_prompt = mocker.patch("tgtg_scanner.scanner.prompt_datadome", return_value="pastedcookie")
+    mock_browser = mocker.patch("tgtg_scanner.scanner.read_browser_datadome")
+    mock_favorites = mocker.patch.object(scanner.tgtg_client, "get_favorites", return_value=[])
+    mock_save = mocker.patch.object(scanner, "_save_tokens")
+
+    scanner._recover_captcha()
+
+    mock_prompt.assert_called_once()
+    mock_browser.assert_not_called()
+    assert scanner.tgtg_client.captcha is None
+    assert scanner.tgtg_client.cookie == "datadome=pastedcookie"
+    mock_favorites.assert_called_once()
+    mock_save.assert_called_once()
+
+
+def test_recover_captcha_prompt_none_falls_back_to_browser(scanner: Scanner, tmp_path: Path, mocker: MockerFixture):
+    scanner.config.token_path = str(tmp_path)
+    scanner.config.tgtg.captcha_prompt = True
+    scanner.tgtg_client.captcha = _pending_captcha()
+    mocker.patch("tgtg_scanner.scanner.prompt_datadome", return_value=None)
+    mock_browser = mocker.patch("tgtg_scanner.scanner.read_browser_datadome", return_value="browsercookie")
+    mocker.patch.object(scanner.tgtg_client, "get_favorites", return_value=[])
+    mocker.patch.object(scanner, "_save_tokens")
+
+    scanner._recover_captcha()
+
+    mock_browser.assert_called_once()
+    assert scanner.tgtg_client.captcha is None
+    assert scanner.tgtg_client.cookie == "datadome=browsercookie"
+
+
+def test_recover_captcha_prompt_disabled_skips_prompt(scanner: Scanner, tmp_path: Path, mocker: MockerFixture):
+    scanner.config.token_path = str(tmp_path)
+    scanner.config.tgtg.captcha_prompt = False
+    scanner.tgtg_client.captcha = _pending_captcha()
+    mock_prompt = mocker.patch("tgtg_scanner.scanner.prompt_datadome")
+    mocker.patch("tgtg_scanner.scanner.read_browser_datadome", return_value="browsercookie")
+    mocker.patch.object(scanner.tgtg_client, "get_favorites", return_value=[])
+    mocker.patch.object(scanner, "_save_tokens")
+
+    scanner._recover_captcha()
+
+    mock_prompt.assert_not_called()
+    assert scanner.tgtg_client.cookie == "datadome=browsercookie"

@@ -8,7 +8,7 @@ from typing import Any, NoReturn
 
 from progress.spinner import Spinner
 
-from tgtg_scanner.captcha import read_browser_datadome, read_inbox_datadome
+from tgtg_scanner.captcha import prompt_datadome, read_browser_datadome, read_inbox_datadome
 from tgtg_scanner.errors import TgtgAPIError, TgtgLoginError
 from tgtg_scanner.models import (
     Config,
@@ -273,9 +273,12 @@ class Scanner:
         try:
             candidate: str | None = None
             from_inbox = False
-            browser = self.config.tgtg.captcha_browser
-            if browser and browser.lower() != "off":
-                candidate = read_browser_datadome(browser, challenge=challenge)
+            if self.config.tgtg.captcha_prompt:
+                candidate = prompt_datadome(challenge)
+            if candidate is None:
+                browser = self.config.tgtg.captcha_browser
+                if browser and browser.lower() != "off":
+                    candidate = read_browser_datadome(browser, challenge=challenge)
             inbox_path: Path | None = None
             if self.config.token_path:
                 inbox_path = Path(self.config.token_path, "datadome_in")
