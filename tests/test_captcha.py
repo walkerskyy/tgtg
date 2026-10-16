@@ -216,7 +216,12 @@ def test_prompt_datadome_os_error(monkeypatch):
 
 
 def test_prompt_datadome_non_tty(monkeypatch):
-    assert _prompt(monkeypatch, line="abc123token\n", tty=False) is None
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, "stdin", _FakeStdin("abc123token\n", tty=False))
+    monkeypatch.setattr(sys, "stdout", stdout)
+
+    assert prompt_datadome(CaptchaChallenge(url=CAPTCHA_URL, first_seen=datetime.now(timezone.utc))) is None
+    assert stdout.getvalue() == ""
 
 
 def test_prompt_datadome_rejects_control_chars(monkeypatch):
