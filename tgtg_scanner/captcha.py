@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from http import HTTPStatus
@@ -53,6 +54,42 @@ def normalize_datadome_value(value: str) -> str | None:
     if value.lower().startswith("datadome="):
         return None
     return value
+
+
+def prompt_datadome(challenge: CaptchaChallenge | None = None) -> str | None:
+    """Interactively ask the user to paste a fresh datadome cookie value.
+
+    Returns the normalized token, or None when prompting is not possible
+    (non-TTY stdin, empty/invalid input, stdin errors). Never raises.
+    """
+    try:
+        if not sys.stdin.isatty():
+            if challenge is not None:
+                log.debug("Captcha prompt skipped - stdin is not a TTY (solve: %s)", challenge.url)
+            return None
+        url = f":\n  {challenge.url}" if challenge is not None else ""
+        sys.stdout.write(
+            f"DataDome captcha challenge - solve it in your browser{url}\n"
+            "Then copy the 'datadome' cookie value (DevTools -> Application -> Cookies) and paste it here:\n> "
+        )
+        sys.stdout.flush()
+        try:
+            raw = sys.stdin.readline()
+        except (EOFError, KeyboardInterrupt, OSError):
+            sys.stdout.write("\n")
+            return None
+        value = normalize_datadome_value(raw)
+        if value is None:
+            if raw.strip():
+                log.warning("Pasted value is not a plausible datadome cookie - ignoring")
+            return None
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F or ch == "�" for ch in value):
+            log.warning("Pasted value does not contain a plausible datadome cookie - ignoring")
+            return None
+        return value
+    except Exception as exc:
+        log.warning("Captcha prompt failed: %s", exc)
+        return None
 
 
 def read_inbox_datadome(path: Path) -> str | None:

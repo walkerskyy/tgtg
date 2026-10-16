@@ -1,3 +1,4 @@
+import io
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,6 +8,7 @@ from tgtg_scanner.captcha import (
     CaptchaChallenge,
     captcha_url_from_response,
     normalize_datadome_value,
+    prompt_datadome,
     read_browser_datadome,
     read_inbox_datadome,
 )
@@ -163,3 +165,61 @@ def test_read_browser_loader_error_warns_and_returns_none(mocker):
     challenge = CaptchaChallenge(url=CAPTCHA_URL, first_seen=datetime.now(timezone.utc))
     assert read_browser_datadome("chrome", challenge=challenge) is None
     assert challenge.warned is True
+
+
+class _FakeStdin:
+    def __init__(self, line: str = "", tty: bool = True, raise_eof: bool = False):
+        self._line = line
+        self._tty = tty
+        self._raise_eof = raise_eof
+
+    def isatty(self) -> bool:
+        return self._tty
+
+    def readline(self) -> str:
+        if self._raise_eof:
+            raise EOFError
+        return self._line
+
+
+def _prompt(monkeypatch, line: str = "", tty: bool = True, raise_eof: bool = False):
+    import sys
+
+    monkeypatch.setattr(sys, "stdin", _FakeStdin(line, tty, raise_eof))
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    return prompt_datadome(CaptchaChallenge(url=CAPTCHA_URL, first_seen=datetime.now(timezone.utc)))
+
+
+def test_prompt_datadome_bare_token(monkeypatch):
+    assert _prompt(monkeypatch, line="abc123token\n") == "abc123token"
+
+
+def test_prompt_datadome_cookie_header_fragment(monkeypatch):
+    assert _prompt(monkeypatch, line="datadome=wrappedtoken; Path=/; Secure\n") == "wrappedtoken"
+
+
+def test_prompt_datadome_empty_line(monkeypatch):
+    assert _prompt(monkeypatch, line="\n") is None
+
+
+def test_prompt_datadome_eof(monkeypatch):
+    assert _prompt(monkeypatch, raise_eof=True) is None
+
+
+def test_prompt_datadome_non_tty(monkeypatch):
+    assert _prompt(monkeypatch, line="abc123token\n", tty=False) is None
+
+
+def test_prompt_datadome_rejects_control_chars(monkeypatch):
+    assert _prompt(monkeypatch, line="bad\x00cookie\n") is None
+
+
+def test_prompt_datadome_prints_challenge_url(monkeypatch):
+    import sys
+
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, "stdin", _FakeStdin("abc\n"))
+    monkeypatch.setattr(sys, "stdout", stdout)
+
+    prompt_datadome(CaptchaChallenge(url=CAPTCHA_URL, first_seen=datetime.now(timezone.utc)))
+    assert CAPTCHA_URL in stdout.getvalue()
