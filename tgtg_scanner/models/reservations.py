@@ -43,6 +43,20 @@ def is_user_blocked_error(err: Exception) -> bool:
     return isinstance(err, TgtgAPIError) and bool(err.args) and str(err.args[0]) == USER_BLOCKED
 
 
+def _error_body_payload(err: Exception) -> dict | list | None:
+    """Best-effort JSON body from a TgtgAPIError(state, content) pair."""
+    if len(err.args) < 2:
+        return None
+    body = err.args[1]
+    if isinstance(body, bytes | str):
+        try:
+            parsed = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            return None
+        return parsed if isinstance(parsed, dict | list) else None
+    return body if isinstance(body, dict | list) else None
+
+
 def _redact_secrets(payload):
     """Recursively blank values of secret-ish keys before logging."""
     if isinstance(payload, dict):
@@ -409,8 +423,16 @@ class Reservations:
                             exc,
                             USER_BLOCKED_COOLDOWN // 60,
                         )
+                        payload = _error_body_payload(exc)
+                        auth_url = None
+                        if payload is not None:
+                            log.error("USER_BLOCKED response: %s", _redact_secrets(payload))
+                            dump_payment_shape(payload, path="user_blocked_shape.json")
+                            auth_url = extract_auth_url(payload)
+                        else:
+                            log.error("USER_BLOCKED response (unparsed): %s", exc.args[1] if len(exc.args) > 1 else exc)
                         if on_user_blocked is not None:
-                            on_user_blocked(replace(reservation, status=USER_BLOCKED))
+                            on_user_blocked(replace(reservation, status=USER_BLOCKED, auth_url=auth_url))
                         break
                     log.warning("Order failed for %s: %s", reservation.display_name, exc)
                     if on_sold_out is not None and is_sold_out_error(exc):

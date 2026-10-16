@@ -39,6 +39,12 @@ def test_user_blocked_text():
     assert "TGTG app" in text
 
 
+def test_user_blocked_text_with_url():
+    r = Reservation("1", 1, "Sicily Vibes", status=USER_BLOCKED, auth_url="https://bank.example/verify")
+    text = Telegram._reservation_text(r)
+    assert "https://bank.example/verify" in text
+
+
 def test_orders_menu_hides_confirmed():
     import asyncio
     from unittest.mock import AsyncMock, MagicMock

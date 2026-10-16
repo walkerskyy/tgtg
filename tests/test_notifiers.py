@@ -237,6 +237,33 @@ def test_console_reservation_auth_url(
     assert "Bank verification" not in capsys.readouterr().out
 
 
+def test_console_reservation_user_blocked_auth_url(
+    reservations: Reservations,
+    favorites: Favorites,
+    capsys: pytest.CaptureFixture,
+):
+    from tgtg_scanner.models.reservations import USER_BLOCKED, Reservation
+
+    config = Config()
+    config.console.enabled = True
+    config.console.cron = Cron()
+    console = Console(config, reservations, favorites)
+
+    console._send(
+        Reservation(
+            item_id="i",
+            amount=1,
+            display_name="Bakery",
+            status=USER_BLOCKED,
+            auth_url="https://bank.example/verify",
+        )
+    )
+    assert "https://bank.example/verify" in capsys.readouterr().out
+
+    console._send(Reservation(item_id="i", amount=1, display_name="Bakery", status=USER_BLOCKED))
+    assert "verify" not in capsys.readouterr().out
+
+
 def test_console_reservation_payment_failed_skips_bank_link(
     reservations: Reservations,
     favorites: Favorites,

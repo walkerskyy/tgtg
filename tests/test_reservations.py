@@ -491,6 +491,38 @@ def test_make_orders_user_blocked_cooldown_expiry_resumes(reservations: Reservat
     assert len(reservations.reservation_query) == 0
 
 
+def test_make_orders_user_blocked_alert_carries_url_and_logs_payload(
+    reservations: Reservations, tgtg_item: dict, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+):
+    body = json.dumps({"state": "USER_BLOCKED", "verification_url": "https://bank.example/verify"}).encode()
+    reservations.client.create_order.side_effect = TgtgAPIError("USER_BLOCKED", body)  # type: ignore[attr-defined]
+    dump = mocker.patch("tgtg_scanner.models.reservations.dump_payment_shape")
+    alert_mock = MagicMock()
+    reservations.reserve("123", "Test Item")
+
+    with caplog.at_level(logging.ERROR, logger="tgtg"):
+        reservations.make_orders({"123": Item(tgtg_item)}, MagicMock(), on_user_blocked=alert_mock)
+
+    alert = alert_mock.call_args[0][0]
+    assert alert.status == USER_BLOCKED
+    assert alert.auth_url == "https://bank.example/verify"
+    dump.assert_called_once()
+    assert dump.call_args[0][0]["state"] == "USER_BLOCKED"
+    assert dump.call_args.kwargs.get("path") == "user_blocked_shape.json"
+    assert "bank.example/verify" in caplog.text
+
+
+def test_make_orders_user_blocked_unparseable_body_does_not_crash(reservations: Reservations, tgtg_item: dict):
+    reservations.client.create_order.side_effect = TgtgAPIError("USER_BLOCKED", b"<html>blocked</html>")  # type: ignore[attr-defined]
+    alert_mock = MagicMock()
+    reservations.reserve("123", "Test Item")
+
+    reservations.make_orders({"123": Item(tgtg_item)}, MagicMock(), on_user_blocked=alert_mock)
+
+    assert alert_mock.call_count == 1
+    assert alert_mock.call_args[0][0].auth_url is None
+
+
 def test_pay_probe_runs_after_order_created(tgtg_item: dict):
     client = MagicMock()
     client.create_order.return_value = {"id": "o1"}
